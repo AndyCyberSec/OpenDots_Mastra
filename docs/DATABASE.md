@@ -73,15 +73,28 @@ CREATE TABLE agent_run_events (       -- append-only journal
   If a journal or status write fails, the client receives `RUN_ERROR` and the
   run is recorded (best effort) as `failed`; OpenDots never claims a durable
   success it could not store.
+- Finalization is idempotent. A normal completion, an error, and the forced stop
+  fallback (2.5 s, when a provider ignores abort) all converge on one terminal
+  write: the first finalize wins, the terminal status cannot be overwritten, and
+  late events or a late agent resolution are ignored. `close()` marks the run
+  finalized before recording `interrupted`, so a late resolution after shutdown
+  cannot turn it into `completed`.
 - On startup, any run still marked `running` is marked `interrupted` with its
   committed events intact. Nothing is retried automatically, so a possibly
   completed tool action is never repeated without owner review.
 - `agent_threads.messages` is the canonical transcript the UI reads (via
   `GET /api/copilotkit/threads/:id/messages`) and that page-save, voice history,
   scheduled tasks, and Slack use.
-- Replay (`/connect`, `/threads/:id/events`) reads the journal in 500-row chunks
-  and still understands legacy `agent_runs.events` rows, so databases from the
-  previous branch upgrade without losing conversations.
+- Replay (`/connect`) reads the journal in 500-row chunks and still understands
+  legacy `agent_runs.events` rows, so databases from the previous branch upgrade
+  without losing conversations.
+- `GET /threads/:id/events` must return a materialized array (runtime interface),
+  so it is bounded by `AGENT_THREAD_EVENTS_LIMIT` (default 10000). When a thread
+  is longer, the response contains the most recent events preceded by a `CUSTOM`
+  `opendots.history_truncated` event (`totalEvents`, `retainedEvents`). Nothing is
+  deleted: `/connect` and the UI still replay the full journal and the transcript
+  is complete. `getThreadState` uses a bounded lookup for the last state snapshot
+  instead of materializing the thread.
 - No retention limit or expiry. Deleting a conversation removes its runs and
   journal rows.
 

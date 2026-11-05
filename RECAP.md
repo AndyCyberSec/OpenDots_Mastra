@@ -140,6 +140,25 @@ Dopo la migrazione è stato fatto un passaggio di affidabilità e completezza:
 - Il pannello Learning mostra stato automatico, prossima eleggibilità, esito e
   ultimo errore.
 
+**Revisione finale (edge case)**
+
+- Finalizzazione idempotente: un primo `finalize` (completamento, errore o stop
+  forzato dopo 2,5 s) vince e marca il run come finalizzato. Eventi tardivi e una
+  risoluzione tardiva dell'agente non scrivono più nulla e non possono
+  sovrascrivere lo stato terminale. Anche `close()` marca il run finalizzato prima
+  di registrare `interrupted`, quindi un completamento tardivo dopo lo shutdown non
+  lo trasforma in `completed`.
+- L'endpoint inspector `/threads/:id/events` (che per interfaccia deve restituire
+  un array) è limitato da `AGENT_THREAD_EVENTS_LIMIT` (default 10000) con un evento
+  `CUSTOM` `opendots.history_truncated`; la cronologia in SQLite non viene
+  cancellata e `/connect` (percorso chat) continua a riprodurre tutto a chunk da
+  500 righe. `getThreadState` legge solo l'ultimo `STATE_SNAPSHOT` (query limitata)
+  invece di materializzare l'intera conversazione.
+- Test di regressione dedicati: corsa stop forzato/completamento tardivo, evento
+  tardivo ignorato, stato non sovrascritto, shutdown con risoluzione tardiva,
+  endpoint limitato con replay completo via `/connect`, snapshot di stato oltre il
+  limite.
+
 **Migrazioni**
 
 - v4 journal durevole, v5 gestione conversazioni (archivio + indici),
@@ -232,7 +251,7 @@ Backup: copia `opendots.sqlite` + `-wal` + `-shm`. Dettagli: `docs/DATABASE.md`.
 - `npx tsc --noEmit`: pulito.
 - `npx eslint src tests`: pulito.
 - `prettier --check`: pulito.
-- `vitest run`: **62 file, 366 test passati**.
+- `vitest run`: **63 file, 370 test passati**.
 - `npm run build`: ok.
 - Smoke test sul build di produzione:
   - streaming SSE, tool call reale (`list_authorized_spaces`), trascrizione

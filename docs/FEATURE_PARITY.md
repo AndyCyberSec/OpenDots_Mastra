@@ -38,6 +38,12 @@ their live validation is deferred (see the last column).
 - Incremental journaling is covered by tests that read durable events while a run
   is still streaming, that restart after a crash and keep committed events, and
   that replay a live run without duplicates.
+- Finalization is idempotent: a forced stop followed by the original completion
+  keeps the first terminal status, ignores late events, and does not extend the
+  journal. A late resolution after shutdown cannot overwrite `interrupted`.
+- The inspector endpoint `/threads/:id/events` is bounded
+  (`AGENT_THREAD_EVENTS_LIMIT`) with an explicit truncation marker; `/connect`
+  remains complete and chunked, so chat history is never truncated.
 - In-memory streaming is bounded (512 recent events) while SQLite keeps the full
   journal; `connect` replays in 500-row chunks.
 - Conversation management is transactional and covered end to end, including

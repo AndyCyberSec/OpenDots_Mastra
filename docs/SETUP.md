@@ -31,14 +31,15 @@ only data store.
 The original TanStack AI agent loop is unchanged; only the adapter configuration
 is provider-independent.
 
-| Variable                | Meaning                                                                          |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| `AI_PROVIDER`           | `openai-compatible` (default) or `ollama`                                        |
-| `AI_BASE_URL`           | Base URL of the OpenAI-compatible API (without `/chat/completions`)              |
-| `AI_API_KEY`            | Server-side credential. Ollama accepts the placeholder `ollama`.                 |
-| `AI_MODEL`              | Exact model id exposed by the provider                                           |
-| `AI_MAX_OUTPUT_TOKENS`  | Optional completion-token cap (default 2200)                                     |
-| `AGENT_MAX_EVENT_BYTES` | Optional per-event journal limit (default 524288); oversized events fail the run |
+| Variable                    | Meaning                                                                                                                           |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `AI_PROVIDER`               | `openai-compatible` (default) or `ollama`                                                                                         |
+| `AI_BASE_URL`               | Base URL of the OpenAI-compatible API (without `/chat/completions`)                                                               |
+| `AI_API_KEY`                | Server-side credential. Ollama accepts the placeholder `ollama`.                                                                  |
+| `AI_MODEL`                  | Exact model id exposed by the provider                                                                                            |
+| `AI_MAX_OUTPUT_TOKENS`      | Optional completion-token cap (default 2200)                                                                                      |
+| `AGENT_MAX_EVENT_BYTES`     | Optional per-event journal limit (default 524288); oversized events fail the run                                                  |
+| `AGENT_THREAD_EVENTS_LIMIT` | Optional bound for the `/threads/:id/events` inspector response (default 10000; older events are replaced by a truncation marker) |
 
 `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL` are still read as
 fallbacks; `AI_*` wins when both are present.
@@ -87,6 +88,10 @@ receipts, background tasks, Learning state, and Slack subscriptions. See
   Their committed events remain replayable; nothing is retried automatically.
 - Memory stays bounded during streaming (512 recent events in RAM); full history
   lives in SQLite and is replayed in 500-row chunks when a client reconnects.
+  The inspector endpoint `/threads/:id/events` is bounded by
+  `AGENT_THREAD_EVENTS_LIMIT` and reports truncation; `/connect` remains complete.
+- Finalization is idempotent: a forced stop and a late agent completion produce a
+  single terminal write and status; late events are ignored.
 - Conversations have no framework retention limit and survive restarts.
 
 ### Conversation management

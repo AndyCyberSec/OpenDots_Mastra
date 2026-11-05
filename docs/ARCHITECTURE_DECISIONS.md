@@ -126,9 +126,19 @@ work); per-token transcript rewrites (write amplification); a second database
 **Consequences.** A crash can lose at most the last unflushed batch (≤64 events
 or 250 ms). Terminal events and status are committed before the client sees
 `RUN_FINISHED`; if that write fails the client gets `RUN_ERROR`. Recovery never
-replays actions; interrupted runs wait for the owner. The runtime's
-`/threads/:id/events` interface still returns a full array, so that endpoint
-assembles history in memory; live/connect paths stream in bounded chunks.
+replays actions; interrupted runs wait for the owner.
+
+Finalization is idempotent. A forced stop (provider ignores abort) sets the run
+finalized before writing its terminal event; a later agent resolution finds the
+run already finalized and cannot append events or overwrite the status. `close()`
+does the same before recording `interrupted`, so shutdown cannot be reversed by a
+late resolution.
+
+The runtime's `/threads/:id/events` interface must return a materialized array.
+That response is capped by `AGENT_THREAD_EVENTS_LIMIT` (default 10000) with a
+`CUSTOM` truncation marker; `/connect` streams the complete journal in 500-row
+chunks, so the UI path never loses history and memory stays bounded. State lookup
+reads only the newest `STATE_SNAPSHOT` rather than replaying the thread.
 
 ## ADR-010: Conversation management owned by OpenDots, not the runtime
 
