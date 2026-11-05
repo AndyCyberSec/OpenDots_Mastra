@@ -1,57 +1,88 @@
 import { expect, it } from 'vitest';
 import {
-  INTELLIGENCE_KEY_MISSING_LABEL,
   setupStatus,
   type PlatformConfig,
 } from '../src/server/platform-config.js';
-const config: PlatformConfig = {
-  intelligenceKey: 'fixture',
-  apiKey: 'fixture',
-  model: 'fixture',
-  baseUrl: 'https://example.com',
-  runtimeUrl: '',
+
+const base: PlatformConfig = {
   voiceName: 'marin',
-  slackUsers: [],
+  runtimeUrl: '',
+  databasePath: 'data/opendots.sqlite',
+  ai: {
+    provider: 'openai-compatible',
+    baseUrl: 'https://api.deepseek.com',
+    apiKey: 'fixture',
+    model: 'deepseek-chat',
+    maxOutputTokens: 2200,
+  },
 };
-it('never claims Slack online without a complete managed channel declaration', () => {
-  expect(setupStatus(config, 'online').slack).toBe('not_configured');
-  expect(
-    setupStatus({ ...config, slackChannel: 'support' }, 'online').slack,
-  ).toBe('setup_required');
-  expect(
-    setupStatus(
-      {
-        ...config,
-        slackChannel: 'support',
-        slackTeam: 'team',
-        slackUsers: ['owner'],
-      },
-      'online',
-    ).slack,
-  ).toBe('online');
+
+const slack = {
+  botToken: 'xoxb-fixture',
+  appToken: 'xapp-fixture',
+  channel: 'opendots',
+  teamId: 'T_FIXTURE',
+  users: ['U_FIXTURE'],
+};
+
+it('reports a ready local install without any cloud orchestration', () => {
+  expect(setupStatus(base)).toMatchObject({
+    model: true,
+    local: true,
+    browser: false,
+    voice: false,
+    composio: false,
+    slack: 'not_configured',
+    missing: [],
+  });
 });
-it('requires Intelligence and model setup and disables voice when either is absent', () => {
+
+it('requires a model and disables voice when it is absent', () => {
   expect(
     setupStatus({
-      ...config,
-      intelligenceKey: '',
+      ...base,
+      ai: undefined,
       voiceKey: 'fixture',
       voiceModel: 'fixture',
     }),
   ).toMatchObject({
-    missing: [INTELLIGENCE_KEY_MISSING_LABEL],
+    model: false,
+    voice: false,
+    missing: ['AI_API_KEY (or OPENAI_API_KEY)', 'AI_MODEL (or OPENAI_MODEL)'],
+  });
+});
+
+it('enables optional integrations only when their configuration is complete', () => {
+  expect(
+    setupStatus({
+      ...base,
+      voiceKey: 'fixture',
+      voiceModel: 'voice-model',
+      browserUrl: 'http://127.0.0.1:4311',
+      browserSecret: 'fixture-secret',
+      composioApiKey: 'composio',
+    }),
+  ).toMatchObject({ voice: true, browser: true, composio: true });
+  expect(setupStatus({ ...base, voiceKey: 'fixture' })).toMatchObject({
     voice: false,
   });
 });
-it('reports activation failure until the SDK recovers online', () => {
-  const declared = {
-    ...config,
-    slackChannel: 'support',
-    slackTeam: 'team',
-    slackUsers: ['owner'],
-  };
-  expect(setupStatus(declared, 'offline', true).slack).toBe(
-    'activation_failed',
-  );
-  expect(setupStatus(declared, 'online', true).slack).toBe('online');
+
+it('reports local Slack status without a managed channel', () => {
+  expect(setupStatus({ ...base, slack })).toMatchObject({ slack: 'starting' });
+  expect(setupStatus({ ...base, slackDeclared: true })).toMatchObject({
+    slack: 'setup_required',
+  });
+  expect(setupStatus({ ...base, slack })).toMatchObject({ slack: 'starting' });
+  expect(setupStatus({ ...base, slack }, 'online')).toMatchObject({
+    slack: 'online',
+  });
+  expect(setupStatus({ ...base, slack }, 'activation_failed')).toMatchObject({
+    slack: 'activation_failed',
+  });
+  expect(
+    setupStatus({ ...base, slack: undefined, slackDeclared: true }),
+  ).toMatchObject({
+    slack: 'setup_required',
+  });
 });

@@ -15,9 +15,16 @@ function fixture(ownerToken?: string) {
   });
   const config = { mode: 'live' as const, baseUrl: 'https://example.com' };
   const platform = new Platform(store, ws, {
-    baseUrl: config.baseUrl,
+    ai: {
+      provider: 'openai-compatible',
+      baseUrl: 'https://example.com/v1',
+      apiKey: 'fixture',
+      model: 'fixture',
+      maxOutputTokens: 100,
+    },
+    databasePath: ':memory:',
+    webSearchProvider: 'disabled',
     voiceName: 'marin',
-    slackUsers: [],
     runtimeUrl: '',
   });
   return {
@@ -116,14 +123,12 @@ it('supports manual pages without credentials and returns validation, scope and 
       )
     ).status,
   ).toBe(409);
-  expect(
-    (
-      await app.request(
-        `${path}/${page.id}/conversation`,
-        request({ dotId: ws.dots()[0].id }),
-      )
-    ).status,
-  ).toBe(503);
+  const conversation = await app.request(
+    `${path}/${page.id}/conversation`,
+    request({ dotId: ws.dots()[0].id }),
+  );
+  expect(conversation.status).toBe(200);
+  expect((await conversation.json()).id).toEqual(expect.any(String));
   expect(ws.pages.get(space, page.id).content).toBe('First');
   expect(
     (

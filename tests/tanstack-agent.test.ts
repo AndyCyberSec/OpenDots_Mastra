@@ -2,6 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { EventType, type RunAgentInput } from '@ag-ui/core';
 import { lastValueFrom, toArray } from 'rxjs';
 import { DotAgent } from '../src/server/dot-agent.js';
+import { LearningService } from '../src/server/learning.js';
+import type { PlatformConfig } from '../src/server/platform-config.js';
 import { completion } from './fixtures/model-stream.js';
 import { Store } from '../src/server/store.js';
 import { WorkspaceStore } from '../src/server/workspace.js';
@@ -20,20 +22,27 @@ function fixture() {
   databases.push(store, workspace);
   const dot = workspace.dots()[0];
   workspace.bindThread('thread', dot.id, 'TanStack');
-  const agent = new DotAgent(
-    store,
-    workspace,
-    {
-      intelligenceKey: 'fixture',
-      apiKey: 'fixture',
-      model: 'custom-model',
-      baseUrl: 'https://unused.invalid/v1',
-      runtimeUrl: '',
-      voiceName: 'marin',
-      slackUsers: [],
-    },
-    dot.id,
-  );
+  const ai = {
+    provider: 'openai-compatible' as const,
+    baseUrl: 'https://unused.invalid/v1',
+    apiKey: 'fixture',
+    model: 'custom-model',
+    maxOutputTokens: 2200,
+  };
+  const config: PlatformConfig = {
+    ai,
+    databasePath: ':memory:',
+    webSearchProvider: 'disabled',
+    runtimeUrl: '',
+    voiceName: 'marin',
+  };
+  const learning = new LearningService(':memory:', {
+    ai,
+    config: { evidenceLimit: 2000 },
+    timeoutMs: 90_000,
+  });
+  databases.push(learning);
+  const agent = new DotAgent(store, workspace, config, dot.id, learning);
   const input: RunAgentInput = {
     threadId: 'thread',
     runId: 'run',
