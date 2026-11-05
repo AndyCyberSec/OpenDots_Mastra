@@ -31,13 +31,14 @@ only data store.
 The original TanStack AI agent loop is unchanged; only the adapter configuration
 is provider-independent.
 
-| Variable               | Meaning                                                             |
-| ---------------------- | ------------------------------------------------------------------- |
-| `AI_PROVIDER`          | `openai-compatible` (default) or `ollama`                           |
-| `AI_BASE_URL`          | Base URL of the OpenAI-compatible API (without `/chat/completions`) |
-| `AI_API_KEY`           | Server-side credential. Ollama accepts the placeholder `ollama`.    |
-| `AI_MODEL`             | Exact model id exposed by the provider                              |
-| `AI_MAX_OUTPUT_TOKENS` | Optional completion-token cap (default 2200)                        |
+| Variable                | Meaning                                                                          |
+| ----------------------- | -------------------------------------------------------------------------------- |
+| `AI_PROVIDER`           | `openai-compatible` (default) or `ollama`                                        |
+| `AI_BASE_URL`           | Base URL of the OpenAI-compatible API (without `/chat/completions`)              |
+| `AI_API_KEY`            | Server-side credential. Ollama accepts the placeholder `ollama`.                 |
+| `AI_MODEL`              | Exact model id exposed by the provider                                           |
+| `AI_MAX_OUTPUT_TOKENS`  | Optional completion-token cap (default 2200)                                     |
+| `AGENT_MAX_EVENT_BYTES` | Optional per-event journal limit (default 524288); oversized events fail the run |
 
 `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL` are still read as
 fallbacks; `AI_*` wins when both are present.
@@ -74,11 +75,30 @@ Every conversation is stored in `DATABASE_PATH` (default
 receipts, background tasks, Learning state, and Slack subscriptions. See
 [DATABASE.md](DATABASE.md).
 
+### Durability and recovery
+
+- A run is recorded as `running` before the model is called; events are appended
+  to `agent_run_events` in small transactions while streaming, and the transcript
+  is checkpointed at most every 250 ms/64 events.
+- Terminal events, final status, and the final transcript are committed before
+  the client receives `RUN_FINISHED`. If that write fails the client receives
+  `RUN_ERROR`; OpenDots never reports an unsaved run as successful.
+- After a crash, runs still marked `running` become `interrupted` at startup.
+  Their committed events remain replayable; nothing is retried automatically.
+- Memory stays bounded during streaming (512 recent events in RAM); full history
+  lives in SQLite and is replayed in 500-row chunks when a client reconnects.
 - Conversations have no framework retention limit and survive restarts.
-- The sidebar lists local threads. Rename/archive/delete are not exposed because
-  those runtime routes are Intelligence-only.
-- Page chat, voice compute, scheduled tasks, and Slack all write to the same
-  conversation store.
+
+### Conversation management
+
+The sidebar supports search, archived view, pagination, and per-conversation
+**Rename**, **Archive/Restore**, and **Delete** (with confirmation). Deleting is
+refused while a run is active, cancels scheduled tasks bound to the conversation,
+and removes its transcript, runs, journal events, approvals, captures, call
+records, Learning evidence, and Slack subscriptions. Pages are kept.
+
+Page chat, voice compute, scheduled tasks, and Slack all write to the same
+conversation store. Archived conversations reject new turns until restored.
 
 ## Local network access
 
@@ -180,8 +200,14 @@ and publishes them. See [LEARNING.md](LEARNING.md).
 
 In the Dot dialog, enter or pick a container ID under **Automatic Learning**,
 enable **Use published skills**, and use **Review evidence and skills** to
-analyze, review, publish, or reject proposals. Nothing is published
-automatically and analysis is owner-triggered.
+analyze, review, publish, or reject proposals.
+
+**Settings → Automatic Learning** can enable background analysis and set the
+minimum interval (5 minutes to one week, default 60). It is off by default and
+respects readiness, new evidence, container/workspace pause, and one analysis per
+scheduler tick. Automatic analysis only creates drafts; publishing is always
+manual. The review panel shows the automatic status, next eligible time, last run
+status, and last error.
 
 ## Development checks
 

@@ -195,10 +195,17 @@ See [Setup](docs/SETUP.md) for calls, Slack, the browser service, computers, Doc
 
 ## Data and privacy
 
-Conversation messages, tool calls, approval receipts, replayable events, and
-Learning state are stored in the local SQLite file (`DATABASE_PATH`, default
-`data/opendots.sqlite`). Conversations survive restarts and have no
+Conversation messages, tool calls, approval receipts, an append-only event
+journal, and Learning state are stored in the local SQLite file (`DATABASE_PATH`,
+default `data/opendots.sqlite`). Conversations survive restarts and have no
 framework-imposed retention limit. There is no hosted conversation database.
+
+Runs are journaled incrementally while they stream: a `running` record is created
+first, events are appended in small transactions, and the terminal event, status,
+and final transcript are committed before the client is told the run finished. If
+a write fails, the client receives an error instead of a false success. After a
+crash, unfinished runs are marked **interrupted** with their committed events
+intact and are never retried automatically.
 
 The configured model provider receives conversation context, including authorized
 page content, tool results, and Learning evidence only when you press **Analyze**.
@@ -215,28 +222,28 @@ No licensing or activation server is contacted.
 
 ## Features
 
-| Area                       | Included                                                                                                                                   |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Spaces and Specialist Dots | Saved names, role instructions, and per-Dot research and memory permissions                                                                |
-| Pages                      | Searchable library, visual editor, slash commands, autosave, and revision checks                                                           |
-| Conversations              | Local SQLite transcripts, page-specific conversations, source links, and replay across restarts                                            |
-| Slack                      | Direct Socket Mode integration with workspace and user allowlists                                                                          |
-| Calls                      | WebRTC speech, delegated compute, bounded sessions, hangup, and timeline receipts                                                          |
-| Background work            | Scheduled server-side turns in their original conversation, with pause and retry controls                                                  |
-| Browser                    | Separate read-only public-page service with page capture and navigation limits                                                             |
-| Dot computers              | Per-Dot browser profiles, files, shell, takeover, permissions, and action records through OpenBot                                          |
-| Connections                | Per-Dot MCP servers, Composio connected apps, per-tool access, and owner approval for MCP write actions                                    |
-| Appearance                 | System, light, and dark themes; dark colors are derived at build time from the light styles                                                |
-| Memory                     | User-managed preferences that permitted Dots can use                                                                                       |
-| Automatic Learning         | Local containers, conversation evidence, model-proposed skills, owner review/publish, and skill delivery; see [Learning](docs/LEARNING.md) |
-| Model providers            | DeepSeek, Ollama, and any OpenAI-compatible endpoint, plus per-Dot model overrides                                                         |
-| Deployment                 | Local Node setup and separate application/browser containers                                                                               |
+| Area                       | Included                                                                                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Spaces and Specialist Dots | Saved names, role instructions, and per-Dot research and memory permissions                                                                      |
+| Pages                      | Searchable library, visual editor, slash commands, autosave, and revision checks                                                                 |
+| Conversations              | Local SQLite transcripts, page-specific conversations, source links, and replay across restarts                                                  |
+| Slack                      | Direct Socket Mode integration with workspace and user allowlists                                                                                |
+| Calls                      | WebRTC speech, delegated compute, bounded sessions, hangup, and timeline receipts                                                                |
+| Background work            | Scheduled server-side turns in their original conversation, with pause and retry controls                                                        |
+| Browser                    | Separate read-only public-page service with page capture and navigation limits                                                                   |
+| Dot computers              | Per-Dot browser profiles, files, shell, takeover, permissions, and action records through OpenBot                                                |
+| Connections                | Per-Dot MCP servers, Composio connected apps, per-tool access, and owner approval for MCP write actions                                          |
+| Appearance                 | System, light, and dark themes; dark colors are derived at build time from the light styles                                                      |
+| Memory                     | User-managed preferences that permitted Dots can use                                                                                             |
+| Automatic Learning         | Local containers, evidence, manual or opt-in scheduled analysis, owner-only review/publish, and skill delivery; see [Learning](docs/LEARNING.md) |
+| Model providers            | DeepSeek, Ollama, and any OpenAI-compatible endpoint, plus per-Dot model overrides                                                               |
+| Deployment                 | Local Node setup and separate application/browser containers                                                                                     |
 
 Scheduled tasks run in their original conversation. If a worker stops or its lease expires during a run, OpenDots marks that run **Interrupted** and waits for an explicit retry. Review its pages and computer actions, then use **Retry after review** when appropriate. Completed effects may already be present even when a run has no final result.
 
-Local checks cover setup, SQLite migrations, durable conversation persistence and replay, permissions, human approvals, streaming, cancellation, timeouts, LAN origin rules, background recovery, Learning analysis/review/delivery, Slack adapter behaviour, and browser isolation. Automated tests use a local OpenAI-compatible fixture and a fake Slack client; they never call a paid provider. **Live DeepSeek/Ollama responses, OpenBot computers, speech, Parallel, Composio, and Slack are intentionally not validated yet** — see [feature parity](docs/FEATURE_PARITY.md#explicitly-deferred-live-validation).
+Local checks cover setup, SQLite migrations (including upgrades from the previous schema), incremental event journaling while streaming, restart recovery, bounded streaming buffers, reconnect replay without duplicates, concurrent-run protection, conversation lifecycle (rename/archive/delete/pagination/search), permissions, human approvals, streaming, cancellation, timeouts, LAN origin rules, background recovery, opt-in Learning scheduling with owner-only publishing, Learning review/delivery, Slack adapter behaviour, and browser isolation. Automated tests use a local OpenAI-compatible fixture and a fake Slack client; they never call a paid provider. **Live DeepSeek/Ollama responses, OpenBot computers, speech, Parallel, Composio, and Slack are intentionally not validated yet** — see [feature parity](docs/FEATURE_PARITY.md#explicitly-deferred-live-validation).
 
-Automatic Learning analysis is owner-triggered (not scheduled) in this build. Existing conversations keep the container they were created with; changing the Dot's container affects only new conversations.
+Automatic Learning analysis is manual by default and can be enabled in Settings with a minimum interval; the scheduler analyzes at most one ready container per tick, only when there is new evidence, and can only create drafts. Publishing always requires owner review. Existing conversations keep the container they were created with; changing the Dot's container affects only new conversations.
 
 This is a single-owner starting point. Shared editing, invitations, file uploads, and interactive page embeds are not included. Schedules are recurring instructions, not a complete goal or event-trigger system. Specialist Dots have separate roles and conversations; multi-Dot group conversations and automatic delegation are further work.
 

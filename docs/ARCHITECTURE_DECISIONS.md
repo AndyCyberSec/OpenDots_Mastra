@@ -105,3 +105,58 @@ them would add risk without removing any Intelligence dependency.
 **Consequences.** Approvals are web-only (as upstream). Interrupted background
 runs require a human retry; durability is state tracking, not exactly-once
 execution.
+
+## ADR-009: Append-only event journal with bounded live buffers
+
+**Decision.** Persist AG-UI events incrementally in `agent_run_events` (thread
+sequence, batched transactions), create a `running` run row before execution, and
+use plain RxJS `Subject`s plus a 512-entry ring buffer for live streaming.
+`connect` replays the journal in 500-row chunks, merges the ring for events not
+yet flushed, and then joins the live subject.
+
+**Why.** The previous design held every event in memory (`ReplaySubject(Infinity)`)
+and wrote the transcript only at the end, so a crash lost the turn and long runs
+grew without bound. The journal gives restart recovery, ordered replay, and
+bounded memory without changing the AG-UI contract or the React client.
+
+**Alternatives.** Keeping an in-memory history and flushing at the end (loses
+work); per-token transcript rewrites (write amplification); a second database
+(unnecessary).
+
+**Consequences.** A crash can lose at most the last unflushed batch (≤64 events
+or 250 ms). Terminal events and status are committed before the client sees
+`RUN_FINISHED`; if that write fails the client gets `RUN_ERROR`. Recovery never
+replays actions; interrupted runs wait for the owner. The runtime's
+`/threads/:id/events` interface still returns a full array, so that endpoint
+assembles history in memory; live/connect paths stream in bounded chunks.
+
+## ADR-010: Conversation management owned by OpenDots, not the runtime
+
+**Decision.** Rename, archive/restore, delete, pagination, and search are
+application endpoints (`/api/conversations`). The runtime keeps its read routes;
+its write routes remain Intelligence-only and are unused.
+
+**Why.** Thread write routes are part of the commercial runtime surface. An
+owner API can enforce OpenDots ownership, Dot/Space associations, and cascade
+cleanup in one SQLite transaction without forking the MIT runtime.
+
+**Consequences.** Deletion is refused while a run is active, cancels scheduled
+tasks bound to the conversation, removes all referencing rows, and keeps pages.
+Archived conversations reject new turns. The sidebar adds search, archived view,
+pagination, and per-conversation actions without changing the overall UI.
+
+## ADR-011: Opt-in automatic Learning analysis on the existing scheduler
+
+**Decision.** Automatic analysis is a workspace setting (off by default) executed
+by the existing `Runner` tick, at most one container per tick, gated by readiness,
+new evidence, container/workspace pause, and a configurable interval (5 min–1
+week). It can only create drafts; publishing stays owner-only.
+
+**Why.** The hosted feature could analyze on a schedule, but unattended model
+calls must be explicit and bounded. Reusing the durable background runner avoids
+a second scheduler and inherits shutdown behavior.
+
+**Consequences.** Eligibility and failures persist in `learning_containers`
+(`lastAutoAttemptAt`, `lastAutoError`, `analyzedEvidenceAt`). Failed attempts wait
+for the interval instead of retrying every tick. Overlapping manual/automatic
+analyses are rejected. The review workflow is unchanged.

@@ -33,6 +33,20 @@ their live validation is deferred (see the last column).
 | 20  | Setup/usage telemetry             | CopilotKit ingest plus runtime telemetry                                                                                        | `SetupTelemetry` + SDK                                                   | Yes                            | Removed; runtime opted out before import                                                                                   | Removed               | `telemetry`, `setup-telemetry`                                         | —                                                                                                |
 | 21  | Managed channels runtime          | Channels SDK activation lifecycle                                                                                               | `@copilotkit/channels`                                                   | Yes                            | Not applicable; Slack is direct                                                                                            | Removed               | `slack` covers the replacement                                         | Only Slack existed upstream                                                                      |
 
+## Reliability notes
+
+- Incremental journaling is covered by tests that read durable events while a run
+  is still streaming, that restart after a crash and keep committed events, and
+  that replay a live run without duplicates.
+- In-memory streaming is bounded (512 recent events) while SQLite keeps the full
+  journal; `connect` replays in 500-row chunks.
+- Conversation management is transactional and covered end to end, including
+  cascade cleanup, task cancellation, archived-turn rejection, pagination and
+  search.
+- Automatic Learning analysis is opt-in and can only create drafts; publishing
+  always requires the owner.
+- Live external integrations remain untested by design (see below).
+
 ## Architecture layering
 
 - React app and CopilotKit React SDK: unchanged.

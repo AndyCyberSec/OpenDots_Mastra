@@ -12,18 +12,18 @@ every connection.
 | `spaces`                                          | Spaces (name, description).                                                                              |
 | `dots`                                            | Specialist Dots: instructions, permissions, default Space, model override, legacy Learning container id. |
 | `dot_spaces`                                      | Many-to-many Space access grants per Dot.                                                                |
-| `thread_bindings`                                 | Owner-visible conversations: thread id, Dot, title, creation time.                                       |
+| `thread_bindings`                                 | Owner-visible conversations: thread id, Dot, title, creation time, archive flag.                         |
 | `pages`                                           | Space pages with revision numbers and Markdown content.                                                  |
 | `page_threads` / `page_reviews`                   | Page ↔ conversation bindings and review receipts.                                                        |
 | `captures`                                        | Last research capture per conversation.                                                                  |
 | `calls`                                           | Voice call receipts.                                                                                     |
 | `mcp_connections`, `mcp_approvals`, `mcp_actions` | MCP connections, pending approvals, and action receipts.                                                 |
 | `computers` and related tables                    | Per-Dot computer identifiers, state, and action audit.                                                   |
-| `settings`, `tasks`, `runs`, `events`             | Workspace settings and durable background work.                                                          |
+| `settings`, `tasks`, `runs`, `events`             | Workspace settings (including opt-in Learning automation) and durable background work.                   |
 | `memories`                                        | Owner-curated long-term preferences injected into the prompt.                                            |
 | `setup_telemetry`                                 | Legacy table; no longer written (no telemetry).                                                          |
 
-## Conversation tables (new)
+## Conversation tables
 
 ```sql
 CREATE TABLE agent_threads (
@@ -32,7 +32,9 @@ CREATE TABLE agent_threads (
   name TEXT,
   createdAt INTEGER NOT NULL,
   updatedAt INTEGER NOT NULL,
-  messages TEXT NOT NULL DEFAULT '[]'   -- JSON array of AG-UI messages
+  messages TEXT NOT NULL DEFAULT '[]',  -- transcript checkpoint (AG-UI messages)
+  nextSeq INTEGER NOT NULL DEFAULT 0,   -- thread-local event sequence
+  archived INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE agent_runs (
@@ -40,18 +42,68 @@ CREATE TABLE agent_runs (
   threadId TEXT NOT NULL,
   agentId TEXT NOT NULL,
   parentRunId TEXT,
-  events TEXT NOT NULL,                 -- JSON array of compacted AG-UI events
-  createdAt INTEGER NOT NULL
+  events TEXT NOT NULL,                 -- legacy compacted events (pre-journal runs)
+  createdAt INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'completed', -- running|completed|failed|interrupted|cancelled
+  startedAt INTEGER NOT NULL DEFAULT 0,
+  finishedAt INTEGER,
+  error TEXT,
+  eventCount INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE agent_run_events (       -- append-only journal
+  runId TEXT NOT NULL,
+  threadId TEXT NOT NULL,
+  seq INTEGER NOT NULL,               -- monotonic per thread
+  event TEXT NOT NULL,                -- one AG-UI event
+  createdAt INTEGER NOT NULL,
+  PRIMARY KEY (runId, seq)
 );
 ```
 
+### Durability model
+
+- A run row is inserted with `status='running'` before the agent starts.
+- Every event is appended to `agent_run_events` in batched transactions (64
+  events or 250 ms), together with the thread `nextSeq` and a transcript
+  checkpoint (`agent_threads.messages`, written at most once per flush).
+  The transcript is never rewritten per token.
+- At finalize, terminal events, run status, and the final transcript are
+  committed in one transaction **before** the client receives `RUN_FINISHED`.
+  If a journal or status write fails, the client receives `RUN_ERROR` and the
+  run is recorded (best effort) as `failed`; OpenDots never claims a durable
+  success it could not store.
+- On startup, any run still marked `running` is marked `interrupted` with its
+  committed events intact. Nothing is retried automatically, so a possibly
+  completed tool action is never repeated without owner review.
 - `agent_threads.messages` is the canonical transcript the UI reads (via
   `GET /api/copilotkit/threads/:id/messages`) and that page-save, voice history,
   scheduled tasks, and Slack use.
-- `agent_runs.events` keeps the replayable event stream for `/connect` and
-  `/threads/:id/events`. Each run stores only the new input messages plus its
-  generated events.
-- No retention limit or expiry. Deleting a thread deletes its runs.
+- Replay (`/connect`, `/threads/:id/events`) reads the journal in 500-row chunks
+  and still understands legacy `agent_runs.events` rows, so databases from the
+  previous branch upgrade without losing conversations.
+- No retention limit or expiry. Deleting a conversation removes its runs and
+  journal rows.
+
+### Indexes
+
+`agent_run_events(threadId, seq)`, `agent_runs(threadId, createdAt)`,
+`agent_runs(status, threadId)`, `agent_threads(updatedAt)`,
+`agent_threads(archived, updatedAt)`, `thread_bindings(ownerId, createdAt)`,
+`thread_bindings(ownerId, archived, createdAt)`.
+
+## Conversation management
+
+`thread_bindings.archived` and `agent_threads.archived` are kept in sync by the
+owner API. Listing uses keyset pagination on `(createdAt, id)` and searches the
+bound title and stored messages. Deletion runs in one transaction and removes:
+
+`thread_bindings`, `agent_threads`, `agent_runs`, `agent_run_events`,
+`page_reviews`, `page_threads`, `captures`, `calls`, `task_threads`,
+`learning_evidence`, and `slack_subscriptions` for that conversation. Pages are
+kept (and can start a fresh page conversation). Scheduled tasks bound to the
+conversation are cancelled first and the request is refused while a run is
+active.
 
 ## Learning tables (new)
 
@@ -62,7 +114,11 @@ CREATE TABLE learning_containers (
   paused INTEGER NOT NULL DEFAULT 0,
   threshold INTEGER NOT NULL DEFAULT 15,
   createdAt INTEGER NOT NULL,
-  lastAnalyzedAt INTEGER
+  lastAnalyzedAt INTEGER,
+  lastAutoAttemptAt INTEGER,       -- last automatic attempt (success or failure)
+  lastAutoError TEXT,              -- sanitized owner-visible failure
+  analyzedEvidenceAt INTEGER,      -- newest evidence timestamp already analyzed
+  analyzedEvidenceCount INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE learning_evidence (
   id TEXT PRIMARY KEY,
@@ -103,6 +159,16 @@ Evidence is a bounded rolling window (`LEARNING_EVIDENCE_LIMIT`, default 2000
 rows per container). Conversations are never trimmed. Skill text is stored in
 `learning_skills.content`.
 
+Automatic analysis is opt-in (`settings.learningAutoAnalyze`, off by default)
+with a minimum interval (`settings.learningIntervalMinutes`, default 60, range
+5–10080). The auto state columns make eligibility survive restarts: a container
+is analyzed only when it is not paused, the workspace is not paused, its
+readiness threshold is met, there is evidence newer than `analyzedEvidenceAt`,
+and the interval since `lastAutoAttemptAt`/`lastAnalyzedAt` has elapsed.
+Analysis runs commit drafts only; publishing remains owner-only. A `running`
+analysis left by a crash is marked failed on upgrade and is not retried
+automatically. Manual analysis is unaffected by the interval.
+
 ## Slack tables (new)
 
 ```sql
@@ -133,7 +199,13 @@ added with idempotent `ALTER TABLE ... ADD COLUMN` checks (for example
 - **Backup:** stop the app, or copy `opendots.sqlite`, `-wal`, and `-shm`
   together.
 - **Conversation repair:** `agent_threads.messages` is plain JSON; a corrupt row
-  can be reset to `[]` without touching other tables. Corrupt `agent_runs` rows
-  are skipped during replay.
-- **Interrupted background runs:** the lease-based runner marks them
+  can be reset to `[]` without touching other tables. Corrupt journal or legacy
+  event rows are skipped during replay rather than breaking the thread.
+- **Interrupted agent runs:** runs left `running` at startup become
+  `interrupted`. Their committed events are still replayable; the client sees the
+  partial turn and the run status, and no action is retried automatically.
+- **Interrupted background tasks:** the lease-based runner marks them
   **Interrupted**; review effects, then retry explicitly.
+- **Learning analysis state:** stale `learning_runs` left `running` are marked
+  failed during migration; the container's `lastAutoAttemptAt` still applies, so
+  the next automatic attempt waits for the configured interval.

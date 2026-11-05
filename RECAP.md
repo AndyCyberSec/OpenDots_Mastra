@@ -76,6 +76,76 @@ semplici cartelle skill.
 
 ---
 
+## 3b. Hardening (iterazione successiva)
+
+Dopo la migrazione è stato fatto un passaggio di affidabilità e completezza:
+
+**Esecuzione durevole**
+
+- Ogni run crea una riga `agent_runs` con stato `running` prima di chiamare il
+  modello e scrive gli eventi AG-UI in un journal append-only
+  (`agent_run_events`), con seq per thread, in transazioni batch (64 eventi o
+  250 ms). La trascrizione viene checkpointata sugli stessi flush, mai a ogni
+  token.
+- Gli eventi terminali, lo stato finale (completed/failed/cancelled/interrupted)
+  e la trascrizione finale sono committati **prima** di inviare `RUN_FINISHED`.
+  Se la scrittura fallisce il client riceve `RUN_ERROR`: non viene mai
+  dichiarato un successo non salvato. Eventi oltre `AGENT_MAX_EVENT_BYTES`
+  fanno fallire il run.
+- Al riavvio i run rimasti `running` diventano `interrupted` con gli eventi già
+  committati intatti. Nessun retry automatico di azioni non idempotenti.
+- Un run concorrente sullo stesso thread viene rifiutato (memoria + DB); un run
+  che ignora l'abort viene finalizzato forzatamente dopo 2,5 s.
+- I run del vecchio schema (`agent_runs.events` JSON) restano replayabili dopo
+  l'upgrade.
+
+**Streaming con memoria limitata**
+
+- Niente più `ReplaySubject(Infinity)`: subject semplici per lo streaming live e
+  ring buffer di 512 eventi usato solo dai client che si riconnettono.
+- `/connect` rilegge il journal a chunk da 500 righe, unisce il ring per gli
+  eventi non ancora flushati e poi si aggancia al live, senza duplicati.
+- La cronologia completa sta in SQLite e non viene mai troncata dai buffer.
+
+**Gestione conversazioni**
+
+- Nuove API owner `/api/conversations`: lista paginata (cursor), ricerca su
+  titolo e contenuto dei messaggi, rinomina, archivia/ripristina, elimina.
+- La sidebar mantiene l'aspetto originale e aggiunge ricerca, vista archivio,
+  "load more" e menu per conversazione (Rename/Archive/Restore/Delete con
+  conferma).
+- La cancellazione rifiuta se un run è attivo, annulla i task pianificati
+  collegati e rimuove in una transazione binding, trascrizione, run, journal,
+  review/binding pagina, capture, calls, task link, evidence Learning e
+  subscription Slack. Le pagine restano.
+- Le conversazioni archiviate rifiutano nuovi turni finché non vengono
+  ripristinate.
+
+**Automatic Learning opzionale**
+
+- Nuove impostazioni (default **off**): `learningAutoAnalyze`,
+  `learningIntervalMinutes` (5–10080, default 60). Interfaccia in Settings.
+- L'analisi automatica usa il **runner di background esistente** (nessun secondo
+  scheduler), analizza al massimo un container per tick, rispetta pausa
+  workspace/container, soglia di readiness, presenza di nuova evidence e
+  intervallo minimo.
+- Non ripete l'analisi su evidence invariata; memorizza `lastAutoAttemptAt`,
+  `lastAutoError`, `analyzedEvidenceAt`, `analyzedEvidenceCount` (persistenti al
+  riavvio). Un'analisi rimasta `running` dopo un crash viene marcata fallita e
+  non ritentata.
+- L'analisi automatica crea **solo bozze**: non pubblica, non modifica skill
+  pubblicate, non tocca istruzioni/permessi/tool dei Dot. La pubblicazione resta
+  manuale. Analisi manuale sempre disponibile; analisi sovrapposte sulla stessa
+  container vengono rifiutate.
+- Il pannello Learning mostra stato automatico, prossima eleggibilità, esito e
+  ultimo errore.
+
+**Migrazioni**
+
+- v4 journal durevole, v5 gestione conversazioni (archivio + indici),
+  v6 stato Learning automatico. Test dedicato che aggiorna un database nello
+  schema del branch precedente (v1–v3) senza perdere conversazioni o replay.
+
 ## 4. Configurazione
 
 ```env
@@ -162,7 +232,7 @@ Backup: copia `opendots.sqlite` + `-wal` + `-shm`. Dettagli: `docs/DATABASE.md`.
 - `npx tsc --noEmit`: pulito.
 - `npx eslint src tests`: pulito.
 - `prettier --check`: pulito.
-- `vitest run`: **58 file, 342 test passati**.
+- `vitest run`: **62 file, 366 test passati**.
 - `npm run build`: ok.
 - Smoke test sul build di produzione:
   - streaming SSE, tool call reale (`list_authorized_spaces`), trascrizione
@@ -181,10 +251,12 @@ I test usano un finto server OpenAI-compatible e un client Slack finto.
 
 ## 9. Limiti noti (documentati)
 
-1. **Learning analysis manuale**, non schedulata. Readiness e threshold per
-   container sono mostrati ma nessun timer esegue l'analisi.
-2. **Rename/archive/delete thread** non esposti: quelle route del runtime sono
-   solo Intelligence. La lista e la cronologia locali funzionano.
+1. **Learning**: l'analisi automatica è opzionale, disattivata di default e
+   limitata da readiness, nuova evidence e intervallo; non pubblica mai da sola.
+   Non esiste un cron per container né uno scheduler cloud.
+2. **Route PATCH/DELETE native del runtime** restano solo Intelligence: la
+   gestione (rename/archive/delete/paginazione/ricerca) è implementata da OpenDots
+   via API proprietarie `/api/conversations`.
 3. **Approvazioni solo in web chat** (come upstream): in Slack/task il Dot chiede
    di continuare nell'app.
 4. **Durabilità = tracciamento stato**, non exactly-once: run interrotti vanno
@@ -192,8 +264,12 @@ I test usano un finto server OpenAI-compatible e un client Slack finto.
 5. **Nessuna memoria semantica** (non c'era nemmeno upstream): memoria owner
    esplicita nel prompt.
 6. **Validazione live rinviata** per tutti i provider esterni.
-7. Un run interrotto da crash non viene scritto: il replay mostra l'ultimo turno
-   completato (scelta di consistenza).
+7. In caso di crash si può perdere al massimo l'ultimo batch non flushato
+   (≤64 eventi o 250 ms). Gli eventi già committati restano, il run viene marcato
+   `interrupted` e nessuna azione viene ripetuta automaticamente.
+8. **Non è exactly-once**: la durabilità traccia lo stato e conserva gli eventi,
+   ma un effetto esterno può essere avvenuto senza esito finale registrato; per
+   questo i run interrotti richiedono revisione umana.
 
 Dettagli: `docs/FEATURE_PARITY.md` e `docs/MASTRA_MIGRATION.md` del branch Mastra
 (solo riferimento storico).
@@ -234,6 +310,7 @@ git push -u origin feature/opendots-local-intelligence
   SQLite, Learning, Slack, telemetria).
 - `docs/LEARNING.md` — workflow Learning locale.
 - `docs/SLACK.md` — setup Slack diretto.
-- `docs/DATABASE.md` — schema, migrazioni, backup.
+- `docs/DATABASE.md` — schema, journal durevole, gestione conversazioni,
+  Learning automatico, migrazioni, backup e recovery.
 - `docs/LICENSE_AUDIT.md` — licenze e costi.
 - `docs/SETUP.md` — setup self-hosted completo.
