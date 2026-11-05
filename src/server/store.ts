@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { migrate } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -40,6 +41,7 @@ export class Store {
     this.db
       .prepare('INSERT OR IGNORE INTO settings VALUES (1, ?)')
       .run(JSON.stringify(defaults));
+    migrate(this.db);
   }
   setupTelemetryState(): string | undefined {
     return (

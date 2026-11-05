@@ -90,8 +90,12 @@ export interface Dot {
   composioSessionId?: string | null;
   composioPolicyHash?: string | null;
   createdAt: number;
+  /** Legacy CopilotKit Intelligence container id. Read for compatibility only. */
   learningContainerId?: string | null;
+  /** Deliver local skills from SKILLS_DIR to this Dot. */
   skillDeliveryEnabled?: boolean;
+  /** Optional per-Dot model override; defaults to the workspace model. */
+  model?: string | null;
 }
 export interface Conversation {
   id: string;
@@ -113,12 +117,11 @@ export interface CallReceipt {
   error: string | null;
 }
 export interface SetupStatus {
-  intelligence: boolean;
+  /** A provider-independent chat model is configured (AI_* or OPENAI_*). */
   model: boolean;
   browser: boolean;
   voice: boolean;
   composio: boolean;
-  slack: string;
   missing: string[];
 }
 export interface WorkspaceState {
