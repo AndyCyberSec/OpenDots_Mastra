@@ -22,6 +22,8 @@ const defaults: Settings = {
   researchAllowed: true,
   memoryAllowed: true,
   appsAllowed: false,
+  learningAutoAnalyze: false,
+  learningIntervalMinutes: 60,
 };
 export class Store {
   private db: DatabaseSync;

@@ -11,6 +11,20 @@ import type {
   LearningRun,
   LearningSkill,
 } from '../shared/learning';
+
+const AUTO_LABELS: Record<LearningContainerSummary['autoReason'], string> = {
+  disabled: 'off in Settings',
+  workspace_paused: 'paused with the workspace',
+  paused: 'paused for this container',
+  not_ready: 'waiting for the readiness threshold',
+  no_new_evidence: 'waiting for new evidence',
+  interval: 'waiting for the interval',
+  eligible: 'eligible on the next background tick',
+};
+
+function autoLabel(reason: LearningContainerSummary['autoReason']) {
+  return AUTO_LABELS[reason] ?? reason;
+}
 import { api } from './api';
 
 interface Detail {
@@ -147,6 +161,20 @@ export function LearningPanel({
         conversations created while a Dot used this container. Analysis uses
         your configured model; nothing is published without your approval.
       </p>
+      <p className="muted">
+        Automatic analysis: {autoLabel(container.autoReason)}
+        {container.nextEligibleAt
+          ? ` · next eligible ${new Date(container.nextEligibleAt).toLocaleString()}`
+          : ''}
+        {latestRun
+          ? ` · last run ${latestRun.status}${latestRun.proposedCount ? ` (${latestRun.proposedCount} proposed)` : ''}`
+          : ''}
+      </p>
+      {container.lastAutoError && (
+        <p className="chat-error" role="alert">
+          {container.lastAutoError}
+        </p>
+      )}
       <p className="muted">
         {container.threadCount} conversation
         {container.threadCount === 1 ? '' : 's'} · {container.evidenceCount}{' '}

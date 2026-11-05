@@ -201,3 +201,32 @@ it('aborts work instead of throwing from an ownership timer', async () => {
     store.close();
   }
 });
+
+it('runs the auxiliary scheduler hook on each tick without overlapping', async () => {
+  const store = new Store(':memory:');
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const calls: string[] = [];
+  const onTick = vi.fn(async () => {
+    calls.push('start');
+    await gate;
+    calls.push('finish');
+  });
+  const runner = new Runner(store, config, undefined, 90_000, onTick);
+  try {
+    const first = runner.tick();
+    const second = runner.tick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(onTick).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([first, second]);
+    expect(calls).toEqual(['start', 'finish']);
+    await runner.tick();
+    expect(onTick).toHaveBeenCalledTimes(2);
+  } finally {
+    runner.stop();
+    store.close();
+  }
+});

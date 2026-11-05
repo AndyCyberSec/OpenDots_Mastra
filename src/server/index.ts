@@ -92,6 +92,7 @@ const runner = new Runner(
     return { text, sources: [], sample: false };
   },
   config.agentRunTimeoutMs,
+  (signal) => platform.learning.autoAnalyzeTick(signal),
 );
 const app = createApp({
   store,

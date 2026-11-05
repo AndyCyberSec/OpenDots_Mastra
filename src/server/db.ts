@@ -207,6 +207,32 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 6,
+    name: 'automatic-learning-analysis',
+    up: (db) => {
+      // Opt-in automatic analysis state. Auto runs are disabled in workspace
+      // settings; these columns make each container's eligibility persistent
+      // and let the owner see failures and the next eligible time.
+      addColumn(db, 'learning_containers', 'lastAutoAttemptAt', 'INTEGER');
+      addColumn(db, 'learning_containers', 'lastAutoError', 'TEXT');
+      addColumn(db, 'learning_containers', 'analyzedEvidenceAt', 'INTEGER');
+      addColumn(
+        db,
+        'learning_containers',
+        'analyzedEvidenceCount',
+        'INTEGER NOT NULL DEFAULT 0',
+      );
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS learning_containers_auto
+          ON learning_containers(paused, lastAutoAttemptAt);
+      `);
+      // A run left "running" by a crash is reported, not retried.
+      db.exec(
+        "UPDATE learning_runs SET status='failed', error='Server stopped during this analysis.', finishedAt=strftime('%s','now')*1000 WHERE status='running'",
+      );
+    },
+  },
 ];
 
 export function migrate(db: DatabaseSync): void {

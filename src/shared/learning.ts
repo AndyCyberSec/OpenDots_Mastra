@@ -31,6 +31,10 @@ export interface LearningContainer {
   threshold: number;
   createdAt: number;
   lastAnalyzedAt: number | null;
+  lastAutoAttemptAt: number | null;
+  lastAutoError: string | null;
+  analyzedEvidenceAt: number | null;
+  analyzedEvidenceCount: number;
 }
 
 export interface LearningContainerSummary extends LearningContainer {
@@ -39,6 +43,27 @@ export interface LearningContainerSummary extends LearningContainer {
   draftCount: number;
   publishedCount: number;
   ready: boolean;
+  /** Persisted error from the last automatic analysis attempt, if any. */
+  lastAutoError: string | null;
+  /** When automatic analysis may run next (null when auto is disabled). */
+  nextEligibleAt: number | null;
+  /** Whether the automatic scheduler would analyze this container now. */
+  autoEligible: boolean;
+  /** Why automatic analysis is waiting, for the review panel. */
+  autoReason:
+    | 'disabled'
+    | 'workspace_paused'
+    | 'paused'
+    | 'not_ready'
+    | 'no_new_evidence'
+    | 'interval'
+    | 'eligible';
+}
+
+export interface LearningAutoTickResult {
+  analyzedContainerId: string | null;
+  proposed: number;
+  error?: string;
 }
 
 export interface LearningSkill {

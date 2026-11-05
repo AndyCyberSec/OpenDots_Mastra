@@ -238,8 +238,16 @@ class GatedAgent extends AbstractAgent {
 
 function streamScript(input: RunAgentInput, count: number): BaseEvent[] {
   const events: BaseEvent[] = [
-    { type: EventType.RUN_STARTED, threadId: input.threadId, runId: input.runId },
-    { type: EventType.TEXT_MESSAGE_START, messageId: 'assistant-stream', role: 'assistant' },
+    {
+      type: EventType.RUN_STARTED,
+      threadId: input.threadId,
+      runId: input.runId,
+    },
+    {
+      type: EventType.TEXT_MESSAGE_START,
+      messageId: 'assistant-stream',
+      role: 'assistant',
+    },
   ];
   for (let index = 0; index < count; index++)
     events.push({
@@ -247,7 +255,10 @@ function streamScript(input: RunAgentInput, count: number): BaseEvent[] {
       messageId: 'assistant-stream',
       delta: `${index},`,
     });
-  events.push({ type: EventType.TEXT_MESSAGE_END, messageId: 'assistant-stream' });
+  events.push({
+    type: EventType.TEXT_MESSAGE_END,
+    messageId: 'assistant-stream',
+  });
   events.push({
     type: EventType.RUN_FINISHED,
     threadId: input.threadId,
@@ -270,7 +281,10 @@ it('persists events incrementally while the run is still streaming', async () =>
   const runner = fixture(join(dir, 'opendots.sqlite'));
   const gate = deferred();
   const threadId = 'thread-incremental';
-  const agent = new GatedAgent((input) => streamScript(input, 80), gate.promise);
+  const agent = new GatedAgent(
+    (input) => streamScript(input, 80),
+    gate.promise,
+  );
   agent.setMessages([{ id: 'user-1', role: 'user', content: 'Stream' }]);
   const input: RunAgentInput = {
     threadId,
@@ -296,8 +310,15 @@ it('persists events incrementally while the run is still streaming', async () =>
   await new Promise((resolve) => setTimeout(resolve, 50));
   expect(runner.runStatus(threadId)?.status).toBe('running');
   const persisted = runner.getThreadEvents(threadId);
-  expect(persisted.filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT).length).toBeGreaterThan(0);
-  expect(runner.getThreadMessages(threadId).some((message) => message.role === 'user')).toBe(true);
+  expect(
+    persisted.filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
+      .length,
+  ).toBeGreaterThan(0);
+  expect(
+    runner
+      .getThreadMessages(threadId)
+      .some((message) => message.role === 'user'),
+  ).toBe(true);
 
   gate.resolve();
   await finished;
@@ -315,7 +336,10 @@ it('marks an unfinished run interrupted on restart and keeps committed events', 
   let runner = fixture(path);
   const gate = deferred();
   const threadId = 'thread-recover';
-  const agent = new GatedAgent((input) => streamScript(input, 70), gate.promise);
+  const agent = new GatedAgent(
+    (input) => streamScript(input, 70),
+    gate.promise,
+  );
   agent.setMessages([{ id: 'user-1', role: 'user', content: 'Recoverable' }]);
   runner
     .run({
@@ -343,7 +367,9 @@ it('marks an unfinished run interrupted on restart and keeps committed events', 
     status: 'interrupted',
     error: expect.stringContaining('Server stopped'),
   });
-  expect(runner.getThreadEvents(threadId).length).toBeGreaterThanOrEqual(committed);
+  expect(runner.getThreadEvents(threadId).length).toBeGreaterThanOrEqual(
+    committed,
+  );
   expect(await runner.isRunning({ threadId })).toBe(false);
   gate.resolve();
 });
@@ -354,7 +380,10 @@ it('keeps the in-memory streaming buffer bounded for long runs', async () => {
   const runner = fixture(join(dir, 'opendots.sqlite'));
   const gate = deferred();
   const threadId = 'thread-bounded';
-  const agent = new GatedAgent((input) => streamScript(input, 5_000), gate.promise);
+  const agent = new GatedAgent(
+    (input) => streamScript(input, 5_000),
+    gate.promise,
+  );
   agent.setMessages([{ id: 'user-1', role: 'user', content: 'Long' }]);
   runner
     .run({
@@ -388,9 +417,12 @@ it('preserves event order across persistence flushes and replay', async () => {
   resources.push(() => rmSync(dir, { recursive: true, force: true }));
   const runner = fixture(join(dir, 'opendots.sqlite'));
   const threadId = 'thread-order';
-  await execute(runner, new ScriptedAgent((input) => streamScript(input, 40)), threadId, [
-    { id: 'user-1', role: 'user', content: 'Order' },
-  ]);
+  await execute(
+    runner,
+    new ScriptedAgent((input) => streamScript(input, 40)),
+    threadId,
+    [{ id: 'user-1', role: 'user', content: 'Order' }],
+  );
   const text = runner
     .getThreadEvents(threadId)
     .filter((event) => event.type === EventType.TEXT_MESSAGE_CONTENT)
@@ -408,7 +440,10 @@ it('rejects a concurrent run on the same thread', async () => {
   const gate = deferred();
   const threadId = 'thread-concurrent';
   const make = () => {
-    const agent = new GatedAgent((input) => streamScript(input, 5), gate.promise);
+    const agent = new GatedAgent(
+      (input) => streamScript(input, 5),
+      gate.promise,
+    );
     agent.setMessages([{ id: 'user-1', role: 'user', content: 'One' }]);
     return {
       agent,
@@ -445,7 +480,11 @@ it('fails a run instead of reporting success when an event exceeds the storage l
   resources.push(() => runner.close());
   const threadId = 'thread-limit';
   const agent = new ScriptedAgent((input) => [
-    { type: EventType.RUN_STARTED, threadId: input.threadId, runId: input.runId },
+    {
+      type: EventType.RUN_STARTED,
+      threadId: input.threadId,
+      runId: input.runId,
+    },
     {
       type: EventType.TEXT_MESSAGE_START,
       messageId: 'big',
@@ -462,7 +501,9 @@ it('fails a run instead of reporting success when an event exceeds the storage l
     { id: 'user-1', role: 'user', content: 'Too big' },
   ]);
   expect(events.some((event) => event.type === EventType.RUN_ERROR)).toBe(true);
-  expect(events.some((event) => event.type === EventType.RUN_FINISHED)).toBe(false);
+  expect(events.some((event) => event.type === EventType.RUN_FINISHED)).toBe(
+    false,
+  );
   expect(runner.runStatus(threadId)?.status).toBe('failed');
 });
 
@@ -472,7 +513,10 @@ it('reconnects to a live run without duplicates and finishes from the live strea
   const runner = fixture(join(dir, 'opendots.sqlite'));
   const gate = deferred();
   const threadId = 'thread-connect';
-  const agent = new GatedAgent((input) => streamScript(input, 120), gate.promise);
+  const agent = new GatedAgent(
+    (input) => streamScript(input, 120),
+    gate.promise,
+  );
   agent.setMessages([{ id: 'user-1', role: 'user', content: 'Reconnect' }]);
   runner
     .run({
@@ -514,5 +558,7 @@ it('reconnects to a live run without duplicates and finishes from the live strea
   expect(text).toBe(
     Array.from({ length: 120 }, (_, index) => `${index},`).join(''),
   );
-  expect(received.some((event) => event.type === EventType.RUN_FINISHED)).toBe(true);
+  expect(received.some((event) => event.type === EventType.RUN_FINISHED)).toBe(
+    true,
+  );
 });

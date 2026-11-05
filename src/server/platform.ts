@@ -58,6 +58,14 @@ export class Platform implements SlackPlatform {
       ai: config.ai,
       config: config.learning ?? { evidenceLimit: 2_000 },
       timeoutMs: config.agentRunTimeoutMs ?? 90_000,
+      settings: () => {
+        const settings = store.settings();
+        return {
+          paused: settings.paused,
+          learningAutoAnalyze: settings.learningAutoAnalyze,
+          learningIntervalMinutes: settings.learningIntervalMinutes,
+        };
+      },
     });
     this.computers = new ComputerService(
       workspace,

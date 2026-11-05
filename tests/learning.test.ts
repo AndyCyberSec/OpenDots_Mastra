@@ -272,3 +272,26 @@ it('supports unpublishing, rejection, and deletion', async () => {
     /not found/,
   );
 });
+
+it('rejects overlapping analyses of the same container', async () => {
+  const model = await startFakeModel({
+    ...{
+      text: JSON.stringify({
+        skills: [
+          { name: 'weekly-review', description: 'One.', content: 'Do it.' },
+        ],
+      }),
+    },
+    delayMs: 200,
+  });
+  resources.push(() => void model.close());
+  const learning = service({ ai: { ...ai, baseUrl: model.baseUrl } });
+  learning.createContainer('research', 'Research');
+  learning.recordTurn('research', evidence('thread-1', 'Evidence'));
+  const first = learning.analyze('research', new AbortController().signal);
+  await expect(
+    learning.analyze('research', new AbortController().signal),
+  ).rejects.toThrow(/already running/);
+  await first;
+  expect(learning.skills('research')).toHaveLength(1);
+});

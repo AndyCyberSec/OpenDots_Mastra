@@ -14,6 +14,10 @@ export interface Settings {
   researchAllowed: boolean;
   memoryAllowed: boolean;
   appsAllowed: boolean;
+  /** Opt-in automatic Learning analysis (disabled by default). */
+  learningAutoAnalyze: boolean;
+  /** Minimum minutes between automatic analyses of one container. */
+  learningIntervalMinutes: number;
 }
 export interface Task {
   id: string;

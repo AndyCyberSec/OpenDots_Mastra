@@ -195,10 +195,19 @@ export function createApp({
         researchAllowed: z.boolean().optional(),
         memoryAllowed: z.boolean().optional(),
         appsAllowed: z.boolean().optional(),
+        learningAutoAnalyze: z.boolean().optional(),
+        learningIntervalMinutes: z.number().int().min(5).max(10080).optional(),
       })
       .strict()
       .safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.json({ error: 'Invalid settings.' }, 400);
+    if (!parsed.success)
+      return c.json(
+        {
+          error:
+            'Invalid settings. Automatic Learning needs an interval between 5 minutes and one week.',
+        },
+        400,
+      );
     const previous = store.settings();
     const settings = store.updateSettings(parsed.data);
     if (

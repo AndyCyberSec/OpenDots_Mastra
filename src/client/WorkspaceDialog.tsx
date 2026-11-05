@@ -55,6 +55,12 @@ export function WorkspaceDialog({
       ? (dialog.dot?.appsAllowed ?? false)
       : state.settings.appsAllowed,
   );
+  const [learningAuto, setLearningAuto] = useState(
+    state.settings.learningAutoAnalyze,
+  );
+  const [learningInterval, setLearningInterval] = useState(
+    String(state.settings.learningIntervalMinutes),
+  );
   const [composioToolkits, setComposioToolkits] = useState(
     dialog.type === 'dot'
       ? (dialog.dot?.composioToolkits ?? []).join(', ')
@@ -186,6 +192,8 @@ export function WorkspaceDialog({
                   researchAllowed: research,
                   memoryAllowed: memory,
                   appsAllowed: apps,
+                  learningAutoAnalyze: learningAuto,
+                  learningIntervalMinutes: Number(learningInterval),
                 };
               }
               if (dialog.type === 'memory') {
@@ -492,6 +500,44 @@ export function WorkspaceDialog({
                 </div>
                 <p className="muted">
                   Saved in this browser. System follows your device.
+                </p>
+              </fieldset>
+            )}
+            {dialog.type === 'settings' && (
+              <fieldset className="appearance-fields">
+                <legend>Automatic Learning</legend>
+                <label className="permission-row">
+                  <input
+                    type="checkbox"
+                    checked={learningAuto}
+                    onChange={(event) => setLearningAuto(event.target.checked)}
+                  />
+                  <span>
+                    <strong>Analyze Learning evidence automatically</strong>
+                    <small>
+                      Uses the configured model on ready containers, at most
+                      once per interval. Proposed skills stay drafts until you
+                      publish them.
+                    </small>
+                  </span>
+                </label>
+                <label className="field-label" htmlFor="learning-interval">
+                  Minimum minutes between analyses
+                </label>
+                <input
+                  id="learning-interval"
+                  type="number"
+                  min={5}
+                  max={10080}
+                  value={learningInterval}
+                  disabled={!learningAuto}
+                  onChange={(event) => setLearningInterval(event.target.value)}
+                />
+                <p className="muted">
+                  Disabled by default (5 minutes to one week). Pausing the
+                  workspace or a container stops automatic analysis; manual
+                  analysis remains available. Learning never publishes a skill
+                  without your approval.
                 </p>
               </fieldset>
             )}

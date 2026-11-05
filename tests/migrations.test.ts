@@ -158,7 +158,7 @@ it('upgrades a previous-branch database without losing conversations', () => {
         version: number;
       }[]
     ).map((row) => row.version);
-    expect(versions).toEqual([1, 2, 3, 4, 5]);
+    expect(versions).toEqual([1, 2, 3, 4, 5, 6]);
     const threadColumns = db
       .prepare('PRAGMA table_info(agent_threads)')
       .all()

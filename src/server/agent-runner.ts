@@ -118,7 +118,7 @@ export interface AgentRunSummary {
   eventCount: number;
 }
 
-export type RunStatus = AgentRunSummary['status'];
+type RunStatus = AgentRunSummary['status'];
 
 /**
  * Batched append-only journal writer for one run.

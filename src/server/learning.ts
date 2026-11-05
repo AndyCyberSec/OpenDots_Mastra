@@ -11,6 +11,7 @@ import {
   learningContainerIdSchema,
   type LearningContainer,
   type LearningContainerSummary,
+  type LearningAutoTickResult,
   type LearningRun,
   type LearningSkill,
   type LearningSkillStatus,
@@ -93,6 +94,8 @@ function parseSkills(text: string) {
 
 export class LearningService {
   private db: DatabaseSync;
+  private autoRunning = false;
+  private analyzing = new Set<string>();
 
   constructor(
     path: string,
@@ -100,6 +103,11 @@ export class LearningService {
       ai: AiSettings | undefined;
       config: LearningConfig;
       timeoutMs: number;
+      settings?: () => {
+        paused: boolean;
+        learningAutoAnalyze: boolean;
+        learningIntervalMinutes: number;
+      };
     },
   ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -127,6 +135,10 @@ export class LearningService {
           threshold: number;
           createdAt: number;
           lastAnalyzedAt: number | null;
+          lastAutoAttemptAt: number | null;
+          lastAutoError: string | null;
+          analyzedEvidenceAt: number | null;
+          analyzedEvidenceCount: number;
         }
       | undefined;
     return row ? this.toContainer(row) : undefined;
@@ -142,6 +154,10 @@ export class LearningService {
       threshold: number;
       createdAt: number;
       lastAnalyzedAt: number | null;
+      lastAutoAttemptAt: number | null;
+      lastAutoError: string | null;
+      analyzedEvidenceAt: number | null;
+      analyzedEvidenceCount: number;
     }[];
     return rows.map((row) => this.summary(this.toContainer(row)));
   }
@@ -149,9 +165,13 @@ export class LearningService {
   summary(container: LearningContainer): LearningContainerSummary {
     const stats = this.db
       .prepare(
-        'SELECT COUNT(*) AS evidenceCount, COUNT(DISTINCT threadId) AS threadCount FROM learning_evidence WHERE containerId=?',
+        'SELECT COUNT(*) AS evidenceCount, COUNT(DISTINCT threadId) AS threadCount, MAX(createdAt) AS lastEvidenceAt FROM learning_evidence WHERE containerId=?',
       )
-      .get(container.id) as { evidenceCount: number; threadCount: number };
+      .get(container.id) as {
+      evidenceCount: number;
+      threadCount: number;
+      lastEvidenceAt: number | null;
+    };
     const skills = this.db
       .prepare(
         'SELECT status, COUNT(*) AS count FROM learning_skills WHERE containerId=? GROUP BY status',
@@ -159,14 +179,105 @@ export class LearningService {
       .all(container.id) as { status: string; count: number }[];
     const count = (status: string) =>
       Number(skills.find((row) => row.status === status)?.count ?? 0);
+    const settings = this.options.settings?.();
+    const ready = Number(stats.threadCount) >= container.threshold;
+    const lastAttempt = Math.max(
+      container.lastAutoAttemptAt ?? 0,
+      container.lastAnalyzedAt ?? 0,
+    );
+    const nextEligibleAt =
+      settings?.learningAutoAnalyze && lastAttempt
+        ? lastAttempt + this.intervalMs(settings.learningIntervalMinutes)
+        : null;
+    const hasNewEvidence =
+      Number(stats.evidenceCount) > 0 &&
+      Number(stats.lastEvidenceAt ?? 0) > (container.analyzedEvidenceAt ?? 0);
+    let autoReason: LearningContainerSummary['autoReason'] = 'eligible';
+    if (!settings?.learningAutoAnalyze) autoReason = 'disabled';
+    else if (settings.paused) autoReason = 'workspace_paused';
+    else if (container.paused) autoReason = 'paused';
+    else if (!ready) autoReason = 'not_ready';
+    else if (!hasNewEvidence) autoReason = 'no_new_evidence';
+    else if (nextEligibleAt && Date.now() < nextEligibleAt)
+      autoReason = 'interval';
     return {
       ...container,
       evidenceCount: Number(stats.evidenceCount),
       threadCount: Number(stats.threadCount),
       draftCount: count('draft'),
       publishedCount: count('published'),
-      ready: Number(stats.threadCount) >= container.threshold,
+      ready,
+      lastAutoError: container.lastAutoError,
+      nextEligibleAt,
+      autoEligible: autoReason === 'eligible',
+      autoReason,
     };
+  }
+
+  private intervalMs(minutes: number) {
+    return Math.min(Math.max(minutes, 5), 10_080) * 60_000;
+  }
+
+  /**
+   * One automatic-analysis opportunity. Returns after at most one container to
+   * bound model usage. Drafts still require owner review; this never publishes.
+   */
+  async autoAnalyzeTick(signal: AbortSignal): Promise<LearningAutoTickResult> {
+    const settings = this.options.settings?.();
+    if (!settings?.learningAutoAnalyze || settings.paused || signal.aborted)
+      return { analyzedContainerId: null, proposed: 0 };
+    if (this.autoRunning) return { analyzedContainerId: null, proposed: 0 };
+    this.autoRunning = true;
+    try {
+      for (const container of this.listContainers()) {
+        if (signal.aborted) break;
+        if (!container.autoEligible) continue;
+        const stats = this.db
+          .prepare(
+            'SELECT COUNT(*) AS count, MAX(createdAt) AS lastEvidenceAt FROM learning_evidence WHERE containerId=?',
+          )
+          .get(container.id) as {
+          count: number;
+          lastEvidenceAt: number | null;
+        };
+        if (!stats.count) continue;
+        this.db
+          .prepare(
+            'UPDATE learning_containers SET lastAutoAttemptAt=?, lastAutoError=NULL WHERE id=?',
+          )
+          .run(Date.now(), container.id);
+        const abort = new AbortController();
+        const stop = () => abort.abort();
+        if (signal.aborted) abort.abort();
+        else signal.addEventListener('abort', stop, { once: true });
+        const timeout = setTimeout(() => abort.abort(), this.options.timeoutMs);
+        try {
+          const result = await this.analyze(container.id, abort.signal);
+          return {
+            analyzedContainerId: container.id,
+            proposed: result.proposed,
+          };
+        } catch (error) {
+          const message = safeLearningError(error, abort.signal.aborted);
+          this.db
+            .prepare(
+              'UPDATE learning_containers SET lastAutoError=? WHERE id=?',
+            )
+            .run(message, container.id);
+          return {
+            analyzedContainerId: container.id,
+            proposed: 0,
+            error: message,
+          };
+        } finally {
+          clearTimeout(timeout);
+          signal.removeEventListener('abort', stop);
+        }
+      }
+      return { analyzedContainerId: null, proposed: 0 };
+    } finally {
+      this.autoRunning = false;
+    }
   }
 
   createContainer(id: string, name: string): LearningContainer {
@@ -415,6 +526,11 @@ export class LearningService {
   async analyze(containerId: string, signal: AbortSignal) {
     const container = this.container(containerId);
     if (!container) throw new Error('Learning container not found.');
+    if (this.analyzing.has(containerId))
+      throw new Error(
+        'An analysis is already running for this Learning container.',
+      );
+    this.analyzing.add(containerId);
     if (container.paused)
       throw new Error('Learning is paused for this container.');
     if (!this.options.ai)
@@ -501,9 +617,21 @@ export class LearningService {
             "UPDATE learning_runs SET status='completed', proposedCount=?, finishedAt=? WHERE id=?",
           )
           .run(created, Date.now(), runId);
+        const stats = this.db
+          .prepare(
+            'SELECT COUNT(*) AS count, MAX(createdAt) AS lastEvidenceAt FROM learning_evidence WHERE containerId=?',
+          )
+          .get(containerId) as { count: number; lastEvidenceAt: number | null };
         this.db
-          .prepare('UPDATE learning_containers SET lastAnalyzedAt=? WHERE id=?')
-          .run(Date.now(), containerId);
+          .prepare(
+            'UPDATE learning_containers SET lastAnalyzedAt=?, analyzedEvidenceAt=?, analyzedEvidenceCount=?, lastAutoError=NULL WHERE id=?',
+          )
+          .run(
+            Date.now(),
+            Number(stats.lastEvidenceAt ?? 0),
+            Number(stats.count),
+            containerId,
+          );
         this.db.exec('COMMIT');
       } catch (error) {
         this.db.exec('ROLLBACK');
@@ -525,6 +653,7 @@ export class LearningService {
       // eslint-disable-next-line preserve-caught-error -- Raw provider causes can expose credentials through SDK logging.
       throw new Error(message);
     } finally {
+      this.analyzing.delete(containerId);
       signal.removeEventListener('abort', abort);
     }
   }
@@ -536,6 +665,10 @@ export class LearningService {
     threshold: number;
     createdAt: number;
     lastAnalyzedAt: number | null;
+    lastAutoAttemptAt: number | null;
+    lastAutoError: string | null;
+    analyzedEvidenceAt: number | null;
+    analyzedEvidenceCount: number;
   }): LearningContainer {
     return {
       id: row.id,
@@ -544,6 +677,19 @@ export class LearningService {
       threshold: row.threshold,
       createdAt: row.createdAt,
       lastAnalyzedAt: row.lastAnalyzedAt,
+      lastAutoAttemptAt: row.lastAutoAttemptAt,
+      lastAutoError: row.lastAutoError,
+      analyzedEvidenceAt: row.analyzedEvidenceAt,
+      analyzedEvidenceCount: row.analyzedEvidenceCount,
     };
   }
+}
+
+function safeLearningError(error: unknown, aborted: boolean): string {
+  if (aborted) return 'Automatic analysis was stopped.';
+  const message =
+    error instanceof Error ? error.message : 'Automatic analysis failed.';
+  return /proposal|evidence|paused|Model configuration|not found/.test(message)
+    ? message
+    : 'Automatic analysis failed. Check the model configuration.';
 }

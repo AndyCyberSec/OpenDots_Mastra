@@ -6,6 +6,8 @@ import { DEFAULT_AGENT_RUN_TIMEOUT_MS } from './platform-config.js';
 export class Runner {
   private timer?: ReturnType<typeof setInterval>;
   private active = new Map<string, AbortController>();
+  private tickAbort?: AbortController;
+  private auxiliaryRunning = false;
   constructor(
     private store: Store,
     private config: Config,
@@ -16,6 +18,8 @@ export class Runner {
       progress: (text: string) => void,
     ) => Promise<Result>,
     private runTimeoutMs = DEFAULT_AGENT_RUN_TIMEOUT_MS,
+    /** Runs on the existing scheduler tick (for automatic Learning analysis). */
+    private onTick?: (signal: AbortSignal) => Promise<unknown>,
   ) {}
   start() {
     if (!this.timer) {
@@ -26,6 +30,7 @@ export class Runner {
   stop() {
     clearInterval(this.timer);
     this.timer = undefined;
+    this.tickAbort?.abort(new Error('Scheduler stopped.'));
     for (const task of this.store.tasks()) {
       if (this.active.has(task.id) && task.lease)
         this.store.interrupt(
@@ -51,6 +56,22 @@ export class Runner {
       console.error(
         'Background runner tick failed; will retry on the next tick.',
       );
+    }
+    // Automatic Learning shares this scheduler rather than starting a second
+    // timer; it is skipped while a previous analysis tick is still running.
+    if (!this.onTick || this.auxiliaryRunning) return;
+    this.auxiliaryRunning = true;
+    const controller = new AbortController();
+    this.tickAbort = controller;
+    try {
+      await this.onTick(controller.signal);
+    } catch {
+      console.error(
+        'Automatic Learning tick failed; will retry on a later tick.',
+      );
+    } finally {
+      this.auxiliaryRunning = false;
+      if (this.tickAbort === controller) this.tickAbort = undefined;
     }
   }
   private async runTick() {

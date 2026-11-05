@@ -8,6 +8,8 @@ const settings: Settings = {
   researchAllowed: true,
   memoryAllowed: true,
   appsAllowed: false,
+  learningAutoAnalyze: false,
+  learningIntervalMinutes: 60,
 };
 const task: Task = {
   id: 'one',
