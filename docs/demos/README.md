@@ -1,5 +1,10 @@
 # Recorded walkthroughs
 
+_Historical recordings from the upstream template. They were captured before
+CopilotKit Intelligence was replaced with local services, so references below to
+an Intelligence project or thread describe the old build. The UI flows are the
+same; conversations, threads, and Learning now live in the local SQLite database._
+
 Recorded from the local OpenDots app on September 29, 2026. The recordings use a dedicated `opendots` Intelligence project, a live `gpt-5.4-mini` model, and example content in a separate Launch studio Space. No customer data or credentials are shown.
 
 | Recording                                    | Flow                                                                                | Duration   | Framing |
