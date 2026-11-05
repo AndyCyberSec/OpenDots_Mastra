@@ -1,4 +1,4 @@
-import { defineTool } from '@copilotkit/runtime/v2';
+import { defineTool } from './tools.js';
 import { computerInputs } from '../shared/computer-types.js';
 import type { ComputerService } from './computer-service.js';
 export function computerTools(

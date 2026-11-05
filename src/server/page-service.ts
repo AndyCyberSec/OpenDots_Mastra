@@ -1,48 +1,27 @@
 import { randomUUID } from 'node:crypto';
+import type { Message } from '@ag-ui/core';
 import { PageError } from './pages.js';
+import type { SqliteAgentRunner } from './agent-runner.js';
 import type { WorkspaceStore } from './workspace.js';
-export interface PageIntelligence {
-  getOrCreateThread(input: {
-    threadId: string;
-    userId: string;
-    agentId: string;
-    name: string;
-  }): Promise<unknown>;
-  getThreadMessages(input: {
-    threadId: string;
-    userId: string;
-  }): Promise<{ messages: { role: string; content?: unknown }[] }>;
-}
-async function bounded<T>(operation: Promise<T>): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(
-              new Error(
-                'Intelligence request timed out. Retry to recover the same conversation.',
-              ),
-            ),
-          30000,
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+
+/**
+ * Page ↔ conversation bindings.
+ *
+ * Conversation history is local now, so creating a page conversation is a
+ * SQLite transaction instead of a remote Intelligence call: reserve the binding,
+ * bind the thread, register it with the durable runner, then mark it ready.
+ */
 export class PageService {
   private pending = new Map<
     string,
     Promise<ReturnType<WorkspaceStore['requireThread']>>
   >();
+
   constructor(
     private workspace: WorkspaceStore,
-    private intelligence: () => PageIntelligence,
+    private runner: () => SqliteAgentRunner,
   ) {}
+
   async conversation(spaceId: string, pageId: string, dotId: string) {
     const page = this.workspace.pages.get(spaceId, pageId);
     const dot = this.workspace.dot(dotId);
@@ -57,7 +36,6 @@ export class PageService {
     const current = this.workspace.pages.thread(pageId, dotId);
     if (current?.ready)
       return this.workspace.requireThread(current.threadId, dotId);
-    const sdk = this.intelligence();
     const task = (async () => {
       const candidateId = randomUUID();
       if (!this.workspace.pages.reserveThread(pageId, dotId, candidateId))
@@ -67,22 +45,14 @@ export class PageService {
         );
       const threadId = this.workspace.pages.thread(pageId, dotId)!.threadId;
       try {
-        await bounded(
-          sdk.getOrCreateThread({
-            threadId,
-            userId: this.workspace.ownerId,
-            agentId: dotId,
-            name: page.title,
-          }),
-        );
-        // The page may have been deleted while Intelligence created its thread.
-        // Recheck before binding a local conversation or marking it ready.
+        // The page may have been deleted while the binding was reserved.
         this.workspace.pages.get(spaceId, pageId);
         if (!this.workspace.canAccessSpace(dotId, spaceId))
           throw new PageError('Space access has been revoked.');
         const thread =
           this.workspace.conversations().find((t) => t.id === threadId) ??
           this.workspace.bindThread(threadId, dotId, page.title);
+        this.runner().registerThread(threadId, dotId, page.title);
         this.workspace.pages.finishThread(pageId, dotId);
         return thread;
       } catch (error) {
@@ -97,6 +67,7 @@ export class PageService {
       this.pending.delete(key);
     }
   }
+
   async saveConversation(
     threadId: string,
     title: string,
@@ -104,14 +75,9 @@ export class PageService {
   ) {
     const thread = this.workspace.requireThread(threadId);
     const dot = this.workspace.dot(thread.dotId)!;
-    const history = await bounded(
-      this.intelligence().getThreadMessages({
-        threadId,
-        userId: this.workspace.ownerId,
-      }),
-    );
+    const messages: Message[] = this.runner().getThreadMessages(threadId);
     const chunks: string[] = [];
-    for (const message of history.messages) {
+    for (const message of messages) {
       if (!['user', 'assistant'].includes(message.role)) continue;
       let text = '';
       if (typeof message.content === 'string') text = message.content;
