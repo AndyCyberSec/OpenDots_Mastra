@@ -20,6 +20,32 @@ interface Migration {
   up: (db: DatabaseSync) => void;
 }
 
+function hasTable(db: DatabaseSync, table: string) {
+  return !!db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+    .get(table);
+}
+
+function hasColumn(db: DatabaseSync, table: string, column: string) {
+  return (
+    hasTable(db, table) &&
+    db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .some((field) => field.name === column)
+  );
+}
+
+function addColumn(
+  db: DatabaseSync,
+  table: string,
+  column: string,
+  definition: string,
+) {
+  if (!hasColumn(db, table, column))
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
 const migrations: Migration[] = [
   {
     version: 1,
@@ -127,6 +153,38 @@ const migrations: Migration[] = [
           createdAt INTEGER NOT NULL,
           PRIMARY KEY (channelId, threadTs)
         );
+      `);
+    },
+  },
+  {
+    version: 4,
+    name: 'incremental-run-journal',
+    up: (db) => {
+      // Runs become execution records with an append-only event journal.
+      // Existing runs keep their compacted `events` JSON for replay; new runs
+      // write rows to agent_run_events as they stream.
+      addColumn(db, 'agent_threads', 'nextSeq', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'agent_runs', 'status', "TEXT NOT NULL DEFAULT 'completed'");
+      addColumn(db, 'agent_runs', 'startedAt', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'agent_runs', 'finishedAt', 'INTEGER');
+      addColumn(db, 'agent_runs', 'error', 'TEXT');
+      addColumn(db, 'agent_runs', 'eventCount', 'INTEGER NOT NULL DEFAULT 0');
+      db.exec(`
+        UPDATE agent_runs SET startedAt = createdAt WHERE startedAt = 0;
+        CREATE TABLE IF NOT EXISTS agent_run_events (
+          runId TEXT NOT NULL,
+          threadId TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          event TEXT NOT NULL,
+          createdAt INTEGER NOT NULL,
+          PRIMARY KEY (runId, seq)
+        );
+        CREATE INDEX IF NOT EXISTS agent_run_events_thread
+          ON agent_run_events(threadId, seq);
+        CREATE INDEX IF NOT EXISTS agent_runs_status
+          ON agent_runs(status, threadId);
+        CREATE INDEX IF NOT EXISTS agent_threads_updated
+          ON agent_threads(updatedAt);
       `);
     },
   },
