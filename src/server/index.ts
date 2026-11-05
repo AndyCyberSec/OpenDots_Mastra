@@ -1,6 +1,6 @@
+import './telemetry-env.js';
 import { webSearchProvider } from './parallel.js';
 import { createShutdown } from './shutdown.js';
-import { reportChannelFailure, safeFailure } from './slack-channel.js';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Store } from './store.js';
@@ -11,10 +11,12 @@ import { WorkspaceStore } from './workspace.js';
 import { Platform } from './platform.js';
 import {
   agentRunTimeoutMsFromEnv,
-  intelligenceApiKeyFromEnv,
-  intelligenceWsUrlFromEnv,
+  aiSettings,
+  learningConfigFromEnv,
+  slackSettingsFromEnv,
   type PlatformConfig,
 } from './platform-config.js';
+
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 4310);
 const ownerToken = process.env.OWNER_TOKEN;
@@ -26,18 +28,24 @@ if (
     'External binding requires an OWNER_TOKEN of at least 24 characters.',
   );
 const database = process.env.DATABASE_PATH ?? 'data/opendots.sqlite';
+const { ai } = aiSettings({ env: process.env });
+const slack = slackSettingsFromEnv(process.env);
+const slackDeclared = [
+  'SLACK_BOT_TOKEN',
+  'SLACK_APP_TOKEN',
+  'SLACK_CHANNEL_NAME',
+  'SLACK_CHANNEL_ID',
+  'SLACK_TEAM_ID',
+  'SLACK_USER_IDS',
+].some((key) => !!process.env[key]?.trim());
 const store = new Store(database);
 const workspace = new WorkspaceStore(
   database,
   process.env.OWNER_ID ?? 'opendots-owner',
 );
 const config: PlatformConfig = {
-  intelligenceKey: intelligenceApiKeyFromEnv(process.env),
-  intelligenceApiUrl: process.env.INTELLIGENCE_API_URL || undefined,
-  intelligenceWsUrl: intelligenceWsUrlFromEnv(process.env),
-  apiKey: process.env.OPENAI_API_KEY,
-  model: process.env.OPENAI_MODEL,
-  baseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+  ai,
+  databasePath: database,
   agentRunTimeoutMs: agentRunTimeoutMsFromEnv(process.env),
   webSearchProvider: webSearchProvider(process.env.WEB_SEARCH_PROVIDER),
   parallelApiKey: process.env.PARALLEL_API_KEY,
@@ -51,22 +59,18 @@ const config: PlatformConfig = {
   voiceKey: process.env.VOICE_API_KEY,
   voiceModel: process.env.VOICE_MODEL,
   voiceName: process.env.VOICE_NAME ?? 'marin',
-  slackChannel: process.env.SLACK_CHANNEL_NAME,
-  slackTeam: process.env.SLACK_TEAM_ID,
-  slackUsers: (process.env.SLACK_USER_IDS ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean),
-  slackDotId: process.env.SLACK_DOT_ID || undefined,
+  slack,
+  slackDeclared,
+  learning: learningConfigFromEnv(process.env),
   runtimeUrl: `http://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/api/copilotkit`,
   ownerToken,
 };
 const platform = new Platform(store, workspace, config);
 const researchConfig = {
   mode: 'live' as const,
-  apiKey: config.apiKey,
-  model: config.model,
-  baseUrl: config.baseUrl,
+  apiKey: ai?.apiKey,
+  model: ai?.model,
+  baseUrl: ai?.baseUrl ?? 'https://api.openai.com/v1',
   webSearchProvider: config.webSearchProvider,
   parallelApiKey: config.parallelApiKey,
   browserUrl: config.browserUrl,
@@ -79,9 +83,9 @@ const runner = new Runner(
     const threadId = workspace.taskThread(claim.id);
     if (!threadId)
       throw new Error(
-        'This legacy task has no Intelligence conversation. Create a new scheduled task from a conversation.',
+        'This legacy task has no conversation. Create a new scheduled task from a conversation.',
       );
-    progress('Running this task in its Intelligence conversation.');
+    progress('Running this task in its conversation.');
     const text = await platform.turn(threadId, claim.prompt, signal, {
       opendotsSource: 'scheduled_task',
     });
@@ -89,9 +93,6 @@ const runner = new Runner(
   },
   config.agentRunTimeoutMs,
 );
-const wsOrigin = new URL(
-  config.intelligenceWsUrl ?? 'wss://realtime.intelligence.copilotkit.ai',
-).origin;
 const app = createApp({
   store,
   runner,
@@ -105,7 +106,7 @@ app.use('*', async (c, next) => {
   c.header('Referrer-Policy', 'no-referrer');
   c.header(
     'Content-Security-Policy',
-    `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${wsOrigin}; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
+    `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
   );
   await next();
 });
@@ -113,14 +114,16 @@ app.get('/api/*', (c) => c.json({ error: 'Not found.' }, 404));
 app.use('/*', serveStatic({ root: './dist/client' }));
 app.get('*', serveStatic({ path: './dist/client/index.html' }));
 const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
-  console.log(`OpenDots template listening on http://${host}:${info.port}`);
+  console.log(
+    `OpenDots listening on http://${host}:${info.port} (local intelligence, TanStack AI agents)`,
+  );
   runner.start();
   void platform
     .start()
     .catch((error) =>
-      reportChannelFailure(
-        'Slack Channels activation failed; check setup status',
-        [safeFailure(error)],
+      console.error(
+        'Slack activation failed; check the Slack configuration',
+        error instanceof Error ? error.name : 'Error',
       ),
     );
 });
@@ -132,8 +135,7 @@ const shutdown = createShutdown({
       server.close((error) => (error ? reject(error) : resolve())),
     ),
   exit: (code) => process.exit(code),
-  report: (operation, error) =>
-    reportChannelFailure(operation, [safeFailure(error)]),
+  report: (operation, error) => console.error(`${operation}: ${String(error)}`),
 });
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

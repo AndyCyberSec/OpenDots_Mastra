@@ -21,6 +21,7 @@ const dotSchema = z
       .default([]),
     learningContainerId: learningContainerIdSchema.optional(),
     skillDeliveryEnabled: z.boolean().optional(),
+    model: z.string().trim().min(1).max(200).nullable().optional(),
     spaceIds: z.array(z.string().min(1)).min(1).max(100).optional(),
     spaceId: z.string().min(1).optional(),
   })
@@ -51,6 +52,7 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       conversations: platform.workspace.conversations(),
       setup: platform.setup(),
       calls: platform.workspace.calls(),
+      learning: platform.learning.listContainers(),
     }),
   );
   app.post('/spaces', async (c) => {
@@ -99,6 +101,8 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         400,
       );
     }
+    if (data.data.learningContainerId)
+      platform.learning.ensureContainer(data.data.learningContainerId);
     return c.json(
       platform.workspace.createDot(
         data.data.spaceId,
@@ -111,6 +115,7 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         data.data.skillDeliveryEnabled,
         data.data.appsAllowed,
         data.data.composioToolkits,
+        data.data.model ?? null,
       ),
       201,
     );
@@ -139,6 +144,8 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         400,
       );
     }
+    if (data.data.learningContainerId)
+      platform.learning.ensureContainer(data.data.learningContainerId);
     return c.json(platform.workspace.updateDot(c.req.param('id'), data.data));
   });
   app.post('/conversations', async (c) => {
@@ -229,7 +236,7 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
     if (text.startsWith('Space access must include'))
       return c.json({ error: text }, 400);
     const known =
-      /^(Setup|Voice setup|Dot |Space |Specialist |Conversation |Call |This call|End the current|Voice provider|An audio|Intelligence could not)/.test(
+      /^(Setup|Model configuration|Learning |Voice setup|Dot |Space |Specialist |Conversation |Call |This call|End the current|Voice provider|An audio)/.test(
         text,
       );
     // A conversation, call or Dot the caller named that does not exist is a missing resource, not a

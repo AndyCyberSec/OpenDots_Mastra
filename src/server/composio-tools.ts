@@ -1,6 +1,6 @@
 import { defineTool, type ToolDefinition } from '@copilotkit/runtime/v2';
 import type { composioSession } from './composio.js';
-import { safeFailure } from './slack-channel.js';
+import { safeFailure } from './safe-failure.js';
 
 type Session = Awaited<ReturnType<typeof composioSession>>;
 type CancellableSession = Session & {
