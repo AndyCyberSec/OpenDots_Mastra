@@ -162,7 +162,7 @@ Backup: copia `opendots.sqlite` + `-wal` + `-shm`. Dettagli: `docs/DATABASE.md`.
 - `npx tsc --noEmit`: pulito.
 - `npx eslint src tests`: pulito.
 - `prettier --check`: pulito.
-- `vitest run`: **57 file, 342 test passati**.
+- `vitest run`: **58 file, 342 test passati**.
 - `npm run build`: ok.
 - Smoke test sul build di produzione:
   - streaming SSE, tool call reale (`list_authorized_spaces`), trascrizione
