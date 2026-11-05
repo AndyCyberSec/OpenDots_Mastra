@@ -2,21 +2,21 @@
 
 # OpenDots
 
-### Always-on AI coworkers that move between text, calls, and Slack.
+### Always-on AI coworkers that move between text and calls — fully self-hosted.
 
-**An open-source template for persistent AI agents, each with its own computer. Available on Web and Mobile.**
+**An open-source template for persistent AI agents, each with its own computer. Conversations stay on your machine.**
 
-Built with [CopilotKit](https://github.com/CopilotKit/CopilotKit) and [AG-UI](https://docs.ag-ui.com/introduction). · [Get started](#get-started) · [Overview](#overview) · [Architecture](#architecture) · [Features](#features) · [Contributing](CONTRIBUTING.md)
+Built with [Mastra](https://mastra.ai) and [AG-UI](https://docs.ag-ui.com/introduction). · [Get started](#get-started) · [Overview](#overview) · [Architecture](#architecture) · [Features](#features) · [Contributing](CONTRIBUTING.md)
 
-[![CI](https://github.com/CopilotKit/OpenDots/actions/workflows/ci.yml/badge.svg)](https://github.com/CopilotKit/OpenDots/actions/workflows/ci.yml)
+[![CI](https://github.com/AndyCyberSec/OpenDots_Mastra/actions/workflows/ci.yml/badge.svg)](https://github.com/AndyCyberSec/OpenDots_Mastra/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Alpha](https://img.shields.io/badge/status-alpha-orange.svg)
 
 <a href="https://trendshift.io/repositories/275323" target="_blank"><img src="https://trendshift.io/api/badge/trendshift/repositories/275323/daily?language=TypeScript" alt="CopilotKit/OpenDots | Trendshift #2 TypeScript Repository Of The Day" width="250" height="55"/></a>
 
-Host OpenDots on your own infrastructure. Conversations require CopilotKit Intelligence: use the hosted service, the [local Docker evaluation](docs/SETUP.md#local-intelligence-evaluation), or a licensed [self-hosted deployment](https://docs.copilotkit.ai/intelligence/self-hosting). Clone this template and customize it however you want.
+Host OpenDots on your own infrastructure. **No CopilotKit Intelligence account, subscription, license activation, or hosted conversation service is required.** Agents run locally on Mastra, conversations and memory persist in the workspace SQLite file, and the model provider is your choice: DeepSeek, Ollama, or any OpenAI-compatible endpoint.
 
-[**Building on OpenDots? Meet with the CopilotKit team →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=opendots_readme)
+This repository is a self-hosted fork of [CopilotKit/OpenDots](https://github.com/CopilotKit/OpenDots). The upstream project remains the reference implementation; see [the migration notes](docs/MASTRA_MIGRATION.md) for what changed and [known limitations](docs/MASTRA_MIGRATION.md#known-limitations) for what was not carried over.
 
 </div>
 
@@ -116,110 +116,106 @@ _Connect, talk, mute, minimize, and return to chat. This is a silent screen capt
 
 ### Slack
 
-Mention a Dot through a managed Slack connection using Channels SDK, then continue in its thread. The integration follows [OpenTag](https://github.com/CopilotKit/OpenTag), with an explicit workspace/user allowlist and a selected specialist. See [Slack setup](docs/SETUP.md#slack) to connect your deployment.
-
-<div align="center">
-
-<table><tr><td>
-
-https://github.com/user-attachments/assets/27d03a6c-a9e0-4c29-8d96-fafe0fbae20f
-
-</td></tr></table>
-
-</div>
-
-Bring your agents into Slack with [Channels SDK](https://github.com/CopilotKit/channels-sdk). See the [managed Channels documentation](https://docs.copilotkit.ai/intelligence/channels) to connect them through CopilotKit Intelligence.
+The managed Slack integration depended on CopilotKit Intelligence Channels and is **not part of this self-hosted fork**. No Slack tokens are read and no Slack connection is attempted. Everything else in this document works without it. See [known limitations](docs/MASTRA_MIGRATION.md#known-limitations) if you want to reintroduce Slack with a local bot.
 
 ## Architecture
 
 ### AG-UI connects the agent to the interface
 
-[AG-UI](https://docs.ag-ui.com/introduction) carries streamed messages, tool calls, and agent state between the backend and CopilotKit components. Computer activity appears inline as the agent works; human-in-the-loop cards pause a tool call for your decision before it continues.
+[AG-UI](https://docs.ag-ui.com/introduction) carries streamed messages, tool calls, and agent state between the backend and the React app. Computer activity appears inline as the agent works; human-in-the-loop cards pause a tool call for your decision before it continues.
 
-The template uses TanStack AI for model streaming and server-tool execution, CopilotKit's React SDK and runtime, Intelligence for durable Threads, and Channels SDK for Slack. Pages, application metadata, and background-work state are stored separately from conversation history.
+[Mastra](https://mastra.ai) runs every Dot: model calls, tool loops, memory, and workflows. The MIT-licensed CopilotKit runtime is used **only as the local AG-UI transport** and thread endpoint layer (SSE mode). It runs with a SQLite-backed runner and no Intelligence client. All agent orchestration, persistence, and memory are local.
 
 ```mermaid
 flowchart TB
-  Web["Web app: pages, Spaces, Dots, chat"] -->|AG-UI| Runtime[CopilotKit runtime]
-  Slack[Slack] <--> Managed[Managed channel connection]
-  Managed <--> Channels[Channels SDK]
-  Channels --> Agents[Specialist compute agents]
-  Runtime --> Agents
-  Agents --> AI[TanStack AI]
-  AI --> Provider[OpenAI-compatible model provider]
-  Runtime <--> Intelligence["Intelligence / Threads"]
-  Channels <--> Intelligence
-  Web <--> Speech[Realtime speech]
-  Speech --> Bridge[Compute bridge]
-  Bridge --> Agents
-  Agents --> Controls[Tool permissions]
-  Controls --> Computer[Isolated browser / workspace]
-  Agents --> Jobs[Background work]
-  Runtime --> Metadata[(Pages, Spaces, Dots, work metadata)]
+  Web["Web app: pages, Spaces, Dots, chat"] -->|AG-UI / SSE| Runtime["CopilotKit runtime (local SSE mode)"]
+  Runtime --> Runner["SQLite agent runner"]
+  Runner --> Agents["Mastra Dot agents"]
+  Agents --> Model["DeepSeek / Ollama / OpenAI-compatible"]
+  Runner --> DB[(opendots.sqlite)]
+  Agents --> Memory["Mastra Memory (mastra_* tables)"]
+  Memory --> DB
+  Agents --> Tools["Pages, MCP connections, Composio, computers, research, local skills"]
+  Tools --> Computer["Isolated OpenBot computer"]
+  Agents --> Jobs["Background and scheduled work"]
+  Runtime --> Metadata[(Spaces, Dots, pages, approvals)]
 ```
 
-You configure the Intelligence project, model provider, and channel connection for your deployment; calls also need a speech provider. Credentials stay on the server. Missing configuration should produce a clear setup state, and test fixtures should remain visibly separate from live integrations.
+Credentials stay on the server. Missing configuration produces a clear setup state instead of a crash, and automated tests use fixtures rather than paid provider calls. See [architecture decisions](docs/ARCHITECTURE_DECISIONS.md), [database schema](docs/DATABASE.md), and the [license audit](docs/LICENSE_AUDIT.md).
 
-[OpenMuse](https://github.com/CopilotKit/OpenMuse) and [OpenBot](https://github.com/CopilotKit/openbot) are code references for persistent work, agent computers, and execution controls. OpenDots can be adapted to your own workflows and deployment choices.
+[OpenMuse](https://github.com/CopilotKit/OpenMuse) and [OpenBot](https://github.com/CopilotKit/openbot) remain code references for persistent work, agent computers, and execution controls.
 
 ## Get started
 
-Use **Node.js 24** and **npm**:
+Use **Node.js 24** and **npm**. Docker is only needed for the optional OpenBot computer service.
 
 ```sh
-git clone https://github.com/CopilotKit/OpenDots.git
-cd OpenDots
+git clone https://github.com/AndyCyberSec/OpenDots_Mastra.git
+cd OpenDots_Mastra
 npm ci
 cp .env.example .env
+# edit .env: set AI_PROVIDER, AI_BASE_URL, AI_API_KEY, AI_MODEL
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173**. You can create Spaces, write pages, and configure Dots before connecting services. To start chatting, connect an Intelligence project and a model.
+Open **http://127.0.0.1:5173**. You can create Spaces, write pages, and configure Dots before configuring a model.
 
-Choose where to store conversations before connecting. For local Docker evaluation, follow [Local Intelligence evaluation](docs/SETUP.md#local-intelligence-evaluation). For hosted Intelligence, sign in and select or create a project in the `OpenDots` folder:
+### DeepSeek
 
-```sh
-npx copilotkit@latest login
-npx copilotkit@latest project select
+```env
+AI_PROVIDER=openai-compatible
+AI_BASE_URL=https://api.deepseek.com
+AI_API_KEY=your-deepseek-api-key
+AI_MODEL=deepseek-chat
 ```
 
-`project select` writes a project key to `.env` as `CPK_INTELLIGENCE_API_KEY`. Keep the generated `CPK_TELEMETRY_ID` with that key so SDK usage can resolve to your Intelligence account. Then add `OPENAI_API_KEY` and `OPENAI_MODEL` to `.env` and restart `npm run dev`.
+### Ollama
 
-Do not run `copilotkit onboard` in this folder. OpenDots already contains its CopilotKit integration, and onboarding adds a second, generic one.
+```env
+AI_PROVIDER=ollama
+AI_BASE_URL=http://127.0.0.1:11434/v1
+AI_MODEL=llama3.1
+```
 
-See [Setup](docs/SETUP.md) for configuration, Slack, calls, the browser service, and Docker.
+Any OpenAI-compatible endpoint works the same way. `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` are still read for existing deployments. A Dot may override the workspace model with its own model id; OpenDots never switches provider or model on its own.
+
+### Local network access
+
+OpenDots binds to `127.0.0.1` by default. To reach it from another device on your LAN, set `HOST=0.0.0.0` (or your LAN address) **and** a random `OWNER_TOKEN` of at least 24 characters. The token is required for every API request and is also the browser login. Keep SQLite, Ollama, the browser service, and the OpenBot supervisor off untrusted networks.
+
+See [Setup](docs/SETUP.md) for calls, the browser service, computers, Docker, and LAN hardening.
 
 ## Data and privacy
 
-Conversation messages, tool calls, and run events are persisted in the configured Intelligence deployment. The hosted setup sends them to CopilotKit's cloud; the local evaluation setup uses Intelligence on your machine. OpenDots has no standalone SQLite conversation store. SQLite stores pages, workspace metadata, and thread bindings separately.
+Conversations, tool calls, approval receipts, run events, and Mastra memory are stored in the local SQLite file (`DATABASE_PATH`, default `data/opendots.sqlite`). Conversations survive restarts and have no framework-imposed retention limit; delete the file or the thread to remove them. There is no hosted conversation database.
 
-The configured model provider receives conversation context, including authorized page content and tool results. Local Intelligence does not make a remote model local: configure the app's model and the Automatic Learning model separately. Public-web research sends queries and selected URLs to Parallel by default; set `WEB_SEARCH_PROVIDER=disabled` to disable those tools. When connected apps are enabled, tool arguments and results pass through Composio and the app provider. Speech and messaging integrations send data to their configured providers when used.
+The configured model provider receives conversation context, including authorized page content and tool results. **Local inference is local only when you point the base URL at a local server such as Ollama.** Public-web research sends queries and selected URLs to Parallel unless you set `WEB_SEARCH_PROVIDER=disabled` or configure the isolated browser. Connected apps send tool arguments through Composio and the app provider. Speech sends audio to the configured speech provider.
 
-CopilotKit SDK telemetry collects usage metadata separately from conversation persistence. OpenDots also records bounded browser setup stages and first successful assistant activation with a random installation ID; the same opt-out flags disable this tracking and purge pending setup events. See [browser setup telemetry](docs/SETUP-TELEMETRY.md). Runtime events are tagged `OpenDots`; see [signup and usage tracking](docs/TELEMETRY.md). Set `COPILOTKIT_TELEMETRY_DISABLED=true` or `DO_NOT_TRACK=1` to opt out; see [CopilotKit telemetry](https://docs.copilotkit.ai/telemetry). Review [CopilotKit's privacy policy](https://www.copilotkit.ai/privacy-policy) and the policies and retention settings of each service you configure. Installing or renewing local Intelligence still requires CopilotKit sign-in and internet access.
+**OpenDots sends no telemetry.** The setup-event transport from the upstream template was removed, and the bundled AG-UI runtime is opted out of its own usage telemetry (`DO_NOT_TRACK=1`) before it is imported. No licensing or activation server is contacted. See [telemetry notes](docs/MASTRA_MIGRATION.md#telemetry).
 
 ## Features
 
-| Area                       | Included                                                                                                                                |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Spaces and Specialist Dots | Saved names, role instructions, and per-Dot research and memory permissions                                                             |
-| Pages                      | Searchable library, visual editor, slash commands, autosave, and revision checks                                                        |
-| Conversations              | React SDK chat and Threads integration, page-specific conversations, and source links                                                   |
-| Slack                      | Managed Channels SDK declaration with workspace and user allowlists                                                                     |
-| Calls                      | WebRTC speech, delegated compute, bounded sessions, hangup, and timeline receipts                                                       |
-| Background work            | Scheduled server-side turns in their original conversation, with pause and retry controls                                               |
-| Browser                    | Separate read-only public-page service with page capture and navigation limits                                                          |
-| Dot computers              | Per-Dot browser profiles, files, shell, takeover, permissions, and action records through OpenBot                                       |
-| Connections                | Per-Dot MCP servers, Composio connected apps, per-tool access, and owner approval for MCP write actions                                 |
-| Appearance                 | System, light, and dark themes; dark colors are derived at build time from the light styles                                             |
-| Memory                     | User-managed preferences that permitted Dots can use                                                                                    |
-| Automatic Learning         | Per-Dot Learning containers, conversation evidence routing, and published-skill delivery; see [setup](docs/SETUP.md#automatic-learning) |
-| Deployment                 | Local Node setup and separate application/browser containers                                                                            |
+| Area                       | Included                                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Spaces and Specialist Dots | Saved names, role instructions, and per-Dot research and memory permissions                                          |
+| Pages                      | Searchable library, visual editor, slash commands, autosave, and revision checks                                     |
+| Conversations              | Local SQLite transcripts, page-specific conversations, source links, durable replay across restarts                  |
+| Agent runtime              | Mastra agents per Dot with provider-independent model configuration                                                  |
+| Calls                      | WebRTC speech, delegated compute, bounded sessions, hangup, and timeline receipts                                    |
+| Background work            | Scheduled server-side turns in their original conversation, with pause and retry controls                            |
+| Browser                    | Separate read-only public-page service with page capture and navigation limits                                       |
+| Dot computers              | Per-Dot browser profiles, files, shell, takeover, permissions, and action records through OpenBot                    |
+| Connections                | Per-Dot MCP servers, Composio connected apps, per-tool access, and owner approval for MCP write actions              |
+| Appearance                 | System, light, and dark themes; dark colors are derived at build time from the light styles                          |
+| Memory                     | Mastra memory in the local database plus user-managed preferences that permitted Dots can use                        |
+| Local skills               | Per-Dot delivery of `SKILLS_DIR` skills (a folder with `SKILL.md` and reference files); see [skills](docs/SKILLS.md) |
+| Deployment                 | Local Node setup and separate application/browser containers                                                         |
 
 Scheduled tasks run in their original conversation. If a worker stops or its lease expires during a run, OpenDots marks that run **Interrupted** and waits for an explicit retry. Review its pages and computer actions, then use **Retry after review** when appropriate. Completed effects may already be present even when a run has no final result.
 
-Local checks cover setup, persistence, permissions, SDK failure handling, and browser isolation. Automated tests use service fixtures. **Live Intelligence, model responses, and page-context chat were verified on September 29, 2026.** Live OpenBot computer browsing, file creation, shell verification, and file persistence across stop/start were also verified locally. Live Realtime speech, call controls, and receipt persistence were verified locally on September 30, 2026. Slack and spoken compute delegation still need connected-service verification. See [recording notes](docs/demos/README.md) for the demonstrated flows and limits.
+Local checks cover setup, SQLite migrations, durable conversation persistence and replay, permissions, human approvals, streaming, cancellation, timeouts, LAN origin rules, and browser isolation. Automated tests use a local OpenAI-compatible fixture server; they never call a paid provider. **Mastra streaming, tool execution, human-in-the-loop tool hand-off, restart persistence, and the local AG-UI HTTP surface are covered by automated integration tests.**
 
-Automatic Learning routing and skill delivery are configured locally. Cloud schedules, eligible-thread counts, and published-skill delivery still need connected-service verification. Skills require review and publication in Intelligence; existing conversations without a container are not enrolled retroactively.
+Live OpenBot computer browsing, file creation, shell verification, persistent files, and live Realtime speech still require your own configured services. See [known limitations](docs/MASTRA_MIGRATION.md#known-limitations) for the remaining verification gaps.
 
 This is a single-owner starting point. Shared editing, invitations, file uploads, and interactive page embeds are not included. Schedules are recurring instructions, not a complete goal or event-trigger system. Specialist Dots have separate roles and conversations; multi-Dot group conversations and automatic delegation are further work.
 
@@ -237,16 +233,15 @@ See [Contributing](CONTRIBUTING.md) for development guidance and [Security](SECU
 
 ## References
 
+- [Mastra documentation](https://mastra.ai/docs)
 - [AG-UI documentation](https://docs.ag-ui.com/introduction)
-- [CopilotKit documentation](https://docs.copilotkit.ai/intelligence/overview)
-- [Channels SDK](https://github.com/CopilotKit/channels-sdk)
+- [CopilotKit OpenDots (upstream)](https://github.com/CopilotKit/OpenDots)
 - [OpenMuse](https://github.com/CopilotKit/OpenMuse)
 - [OpenBot](https://github.com/CopilotKit/openbot)
-- [OpenTag](https://github.com/CopilotKit/OpenTag) — Channels SDK integration reference
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE). OpenDots is a fork of CopilotKit's MIT-licensed OpenDots template; original copyright and attribution are preserved. See [license audit](docs/LICENSE_AUDIT.md) for the full dependency assessment.
 
 ## Public-web research
 
