@@ -43,6 +43,7 @@ export class WorkspaceStore {
       // Per-Dot model override. Null keeps the workspace default model.
       ['dots', 'model', 'TEXT'],
       ['thread_bindings', 'archived', 'INTEGER NOT NULL DEFAULT 0'],
+      ['dots', 'delegationApprovalRequired', 'INTEGER NOT NULL DEFAULT 1'],
     ]) {
       if (
         !this.db
@@ -136,6 +137,16 @@ export class WorkspaceStore {
         composioToolkits: JSON.parse(String(row.composioToolkits ?? '[]')),
         skillDeliveryEnabled: !!row.skillDeliveryEnabled,
         model: typeof row.model === 'string' ? row.model : null,
+        delegationApprovalRequired: !!row.delegationApprovalRequired,
+        delegatesTo: this.tableExists('dot_delegations')
+          ? (
+              this.db
+                .prepare(
+                  'SELECT targetDotId FROM dot_delegations WHERE callerDotId=? ORDER BY targetDotId',
+                )
+                .all(String(row.id)) as { targetDotId: string }[]
+            ).map((edge) => String(edge.targetDotId))
+          : [],
       })) as unknown as Dot[];
   }
   dot(id: string) {
@@ -395,6 +406,200 @@ export class WorkspaceStore {
       throw error;
     }
     return this.requireThread(id);
+  }
+
+  conversationIdsForDot(dotId: string): string[] {
+    return (
+      this.db
+        .prepare('SELECT id FROM thread_bindings WHERE dotId=? AND ownerId=?')
+        .all(dotId, this.ownerId) as { id: string }[]
+    ).map((row) => row.id);
+  }
+
+  /**
+   * Delete a Dot and everything bound to it. Conversations are removed with
+   * their transcripts and receipts; pages created by the Dot are kept in their
+   * Spaces. Callers must cancel scheduled tasks and refuse active runs first.
+   */
+  deleteDot(dotId: string): boolean {
+    const dot = this.db.prepare('SELECT id FROM dots WHERE id=?').get(dotId);
+    if (!dot) return false;
+    const conversations = this.conversationIdsForDot(dotId);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const threadId of conversations) {
+        for (const [table, column] of [
+          ['agent_run_events', 'threadId'],
+          ['agent_runs', 'threadId'],
+          ['agent_threads', 'threadId'],
+          ['page_reviews', 'threadId'],
+          ['page_threads', 'threadId'],
+          ['captures', 'threadId'],
+          ['calls', 'threadId'],
+          ['task_threads', 'threadId'],
+          ['learning_evidence', 'threadId'],
+          ['slack_subscriptions', 'threadId'],
+          ['mcp_actions', 'threadId'],
+        ] as const) {
+          if (!this.tableExists(table)) continue;
+          this.db
+            .prepare(`DELETE FROM ${table} WHERE ${column}=?`)
+            .run(threadId);
+        }
+      }
+      this.db
+        .prepare('DELETE FROM thread_bindings WHERE dotId=? AND ownerId=?')
+        .run(dotId, this.ownerId);
+      if (this.tableExists('mcp_actions')) {
+        this.db
+          .prepare(
+            'DELETE FROM mcp_actions WHERE connectionId IN (SELECT id FROM mcp_connections WHERE dotId=?)',
+          )
+          .run(dotId);
+      }
+      for (const [table, column] of [
+        ['mcp_approvals', 'dotId'],
+        ['mcp_connections', 'dotId'],
+        ['computer_permissions', 'dotId'],
+        ['computer_audit', 'dotId'],
+        ['page_threads', 'dotId'],
+        ['learning_evidence', 'dotId'],
+        ['dot_delegations', 'callerDotId'],
+        ['dot_delegations', 'targetDotId'],
+        ['delegation_approvals', 'callerDotId'],
+        ['delegation_approvals', 'targetDotId'],
+        ['dot_spaces', 'dotId'],
+      ] as const) {
+        if (!this.tableExists(table)) continue;
+        this.db.prepare(`DELETE FROM ${table} WHERE ${column}=?`).run(dotId);
+      }
+      this.db.prepare('DELETE FROM dots WHERE id=?').run(dotId);
+      this.db.exec('COMMIT');
+      return true;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /** True when `caller` is explicitly allowed to delegate to `target`. */
+  canDelegate(callerDotId: string, targetDotId: string): boolean {
+    if (callerDotId === targetDotId) return false;
+    if (!this.dot(callerDotId) || !this.dot(targetDotId)) return false;
+    return !!this.db
+      .prepare(
+        'SELECT 1 FROM dot_delegations WHERE callerDotId=? AND targetDotId=?',
+      )
+      .get(callerDotId, targetDotId);
+  }
+
+  /**
+   * Replace a Dot's outgoing delegation edges. Only existing Dots can be
+   * targets, never the caller itself; names are irrelevant and may change.
+   */
+  setDelegations(
+    callerDotId: string,
+    targetDotIds: string[],
+    approvalRequired: boolean,
+  ): Dot {
+    if (!this.dot(callerDotId)) throw new Error('Dot not found.');
+    const targets = [...new Set(targetDotIds)].filter(Boolean);
+    if (targets.some((id) => id === callerDotId))
+      throw new Error('A Dot cannot delegate to itself.');
+    if (targets.some((id) => !this.dot(id)))
+      throw new Error('Delegation target Dot not found.');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare('DELETE FROM dot_delegations WHERE callerDotId=?')
+        .run(callerDotId);
+      const insert = this.db.prepare(
+        'INSERT INTO dot_delegations (callerDotId, targetDotId, createdAt) VALUES (?, ?, ?)',
+      );
+      for (const target of targets) insert.run(callerDotId, target, Date.now());
+      this.db
+        .prepare('UPDATE dots SET delegationApprovalRequired=? WHERE id=?')
+        .run(+approvalRequired, callerDotId);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.dot(callerDotId)!;
+  }
+
+  createDelegationApproval(input: {
+    callerDotId: string;
+    callerThreadId: string;
+    targetDotId: string;
+    request: string;
+    ttlMs: number;
+  }): { id: string; expiresAt: number } {
+    const id = randomUUID();
+    const now = Date.now();
+    const expiresAt = now + input.ttlMs;
+    this.db
+      .prepare(
+        "INSERT INTO delegation_approvals (id, callerDotId, callerThreadId, targetDotId, request, status, createdAt, expiresAt) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+      )
+      .run(
+        id,
+        input.callerDotId,
+        input.callerThreadId,
+        input.targetDotId,
+        input.request,
+        now,
+        expiresAt,
+      );
+    return { id, expiresAt };
+  }
+
+  delegationApproval(id: string) {
+    const row = this.db
+      .prepare('SELECT * FROM delegation_approvals WHERE id=?')
+      .get(id) as
+      | {
+          id: string;
+          callerDotId: string;
+          callerThreadId: string;
+          targetDotId: string;
+          request: string;
+          status: string;
+          createdAt: number;
+          decidedAt: number | null;
+          expiresAt: number;
+          result: string | null;
+          error: string | null;
+        }
+      | undefined;
+    return row;
+  }
+
+  /** Atomically claim a pending approval; false means it was already handled. */
+  claimDelegationApproval(
+    id: string,
+    action: 'approved' | 'declined',
+  ): boolean {
+    return (
+      this.db
+        .prepare(
+          "UPDATE delegation_approvals SET status=?, decidedAt=? WHERE id=? AND status='pending' AND expiresAt>?",
+        )
+        .run(action, Date.now(), id, Date.now()).changes > 0
+    );
+  }
+
+  finishDelegationApproval(
+    id: string,
+    status: 'completed' | 'failed',
+    result: string | null,
+    error: string | null,
+  ) {
+    this.db
+      .prepare(
+        'UPDATE delegation_approvals SET status=?, result=?, error=? WHERE id=?',
+      )
+      .run(status, result, error, id);
   }
 
   taskIdsForThread(threadId: string): string[] {

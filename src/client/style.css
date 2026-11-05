@@ -4357,3 +4357,8 @@ h3 {
 .thread-actions .danger {
   color: #b04a4a;
 }
+
+.delete-dot {
+  margin-top: 0.6rem;
+  color: #b04a4a;
+}

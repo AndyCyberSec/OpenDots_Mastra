@@ -22,6 +22,8 @@ const dotSchema = z
     learningContainerId: learningContainerIdSchema.optional(),
     skillDeliveryEnabled: z.boolean().optional(),
     model: z.string().trim().min(1).max(200).nullable().optional(),
+    delegatesTo: z.array(z.string().min(1).max(80)).max(50).optional(),
+    delegationApprovalRequired: z.boolean().optional(),
     spaceIds: z.array(z.string().min(1)).min(1).max(100).optional(),
     spaceId: z.string().min(1).optional(),
   })
@@ -101,24 +103,33 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         400,
       );
     }
+    if (data.data.delegatesTo?.some((id) => !platform.workspace.dot(id)))
+      return c.json({ error: 'A delegation target Dot does not exist.' }, 400);
     if (data.data.learningContainerId)
       platform.learning.ensureContainer(data.data.learningContainerId);
-    return c.json(
-      platform.workspace.createDot(
-        data.data.spaceId,
-        data.data.name,
-        data.data.instructions,
-        data.data.researchAllowed,
-        data.data.memoryAllowed,
-        data.data.spaceIds,
-        data.data.learningContainerId,
-        data.data.skillDeliveryEnabled,
-        data.data.appsAllowed,
-        data.data.composioToolkits,
-        data.data.model ?? null,
-      ),
-      201,
+    const created = platform.workspace.createDot(
+      data.data.spaceId,
+      data.data.name,
+      data.data.instructions,
+      data.data.researchAllowed,
+      data.data.memoryAllowed,
+      data.data.spaceIds,
+      data.data.learningContainerId,
+      data.data.skillDeliveryEnabled,
+      data.data.appsAllowed,
+      data.data.composioToolkits,
+      data.data.model ?? null,
     );
+    if (
+      data.data.delegatesTo !== undefined ||
+      data.data.delegationApprovalRequired !== undefined
+    )
+      platform.workspace.setDelegations(
+        created.id,
+        data.data.delegatesTo ?? [],
+        data.data.delegationApprovalRequired ?? true,
+      );
+    return c.json(platform.workspace.dot(created.id), 201);
   });
   app.put('/dots/:id', async (c) => {
     const data = dotSchema.safeParse(await c.req.json().catch(() => null));
@@ -144,9 +155,81 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         400,
       );
     }
+    const id = c.req.param('id');
+    if (
+      data.data.delegatesTo?.some(
+        (targetId) => targetId === id || !platform.workspace.dot(targetId),
+      )
+    )
+      return c.json(
+        {
+          error:
+            'A delegation target Dot does not exist, or a Dot cannot delegate to itself.',
+        },
+        400,
+      );
     if (data.data.learningContainerId)
       platform.learning.ensureContainer(data.data.learningContainerId);
-    return c.json(platform.workspace.updateDot(c.req.param('id'), data.data));
+    platform.workspace.updateDot(id, data.data);
+    if (
+      data.data.delegatesTo !== undefined ||
+      data.data.delegationApprovalRequired !== undefined
+    )
+      platform.workspace.setDelegations(
+        id,
+        data.data.delegatesTo ?? current.delegatesTo ?? [],
+        data.data.delegationApprovalRequired ??
+          current.delegationApprovalRequired ??
+          true,
+      );
+    return c.json(platform.workspace.dot(id));
+  });
+  app.delete('/dots/:id', async (c) => {
+    const id = c.req.param('id');
+    if (!platform.workspace.dot(id))
+      return c.json({ error: 'Dot not found.' }, 404);
+    if (platform.workspace.dots().length <= 1)
+      return c.json(
+        {
+          error:
+            'Create another specialist before deleting the last Dot. Nothing was deleted.',
+        },
+        409,
+      );
+    const conversations = platform.workspace.conversationIdsForDot(id);
+    for (const threadId of conversations) {
+      if (await platform.runner.isRunning({ threadId }))
+        return c.json(
+          {
+            error:
+              'This Dot has a conversation with an active run. Stop it before deleting the Dot. Nothing was deleted.',
+          },
+          409,
+        );
+    }
+    const taskIds = [
+      ...new Set(
+        conversations.flatMap((threadId) =>
+          platform.workspace.taskIdsForThread(threadId),
+        ),
+      ),
+    ];
+    for (const taskId of taskIds) {
+      try {
+        platform.store.action(taskId, 'cancel');
+      } catch {
+        // A task that cannot be cancelled is still unlinked by the deletion.
+      }
+    }
+    if (!platform.workspace.deleteDot(id))
+      return c.json({ error: 'Dot not found.' }, 404);
+    for (const threadId of conversations)
+      platform.runner.forgetThread(threadId);
+    return c.json({
+      ok: true,
+      deletedConversations: conversations.length,
+      cancelledTasks: taskIds.length,
+    });
   });
   app.post('/conversations', async (c) => {
     const data = z

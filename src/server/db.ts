@@ -233,6 +233,39 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    version: 7,
+    name: 'dot-delegation',
+    up: (db) => {
+      // Owner-managed delegation graph: edges are stable Dot IDs, never names,
+      // so renaming does not break grants. Deleting a Dot removes its edges.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS dot_delegations (
+          callerDotId TEXT NOT NULL,
+          targetDotId TEXT NOT NULL,
+          createdAt INTEGER NOT NULL,
+          PRIMARY KEY (callerDotId, targetDotId)
+        );
+        CREATE INDEX IF NOT EXISTS dot_delegations_target
+          ON dot_delegations(targetDotId);
+        CREATE TABLE IF NOT EXISTS delegation_approvals (
+          id TEXT PRIMARY KEY,
+          callerDotId TEXT NOT NULL,
+          callerThreadId TEXT NOT NULL,
+          targetDotId TEXT NOT NULL,
+          request TEXT NOT NULL,
+          status TEXT NOT NULL,
+          createdAt INTEGER NOT NULL,
+          decidedAt INTEGER,
+          expiresAt INTEGER NOT NULL,
+          result TEXT,
+          error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS delegation_approvals_status
+          ON delegation_approvals(status, createdAt);
+      `);
+    },
+  },
 ];
 
 export function migrate(db: DatabaseSync): void {

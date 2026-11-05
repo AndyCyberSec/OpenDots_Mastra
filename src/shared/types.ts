@@ -100,6 +100,10 @@ export interface Dot {
   skillDeliveryEnabled?: boolean;
   /** Optional per-Dot model override; defaults to the workspace model. */
   model?: string | null;
+  /** Dot ids this specialist may delegate work to (owner-managed). */
+  delegatesTo?: string[];
+  /** When true (default), delegation requires owner approval in web chat. */
+  delegationApprovalRequired?: boolean;
 }
 export interface Conversation {
   id: string;

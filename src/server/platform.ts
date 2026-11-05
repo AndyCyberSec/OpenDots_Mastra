@@ -11,6 +11,7 @@ import type { AiSettings } from './ai.js';
 import { ComputerService } from './computer-service.js';
 import { ConnectionService } from './connections.js';
 import { DotAgent } from './dot-agent.js';
+import { DelegationService } from './delegation.js';
 import { currentTurnText } from './headless.js';
 import { PageService } from './page-service.js';
 import { LearningService } from './learning.js';
@@ -43,6 +44,7 @@ export class Platform implements SlackPlatform {
   readonly connections: ConnectionService;
   readonly runner: SqliteAgentRunner;
   readonly learning: LearningService;
+  readonly delegations: DelegationService;
   readonly slack: SlackService;
   readonly ai?: AiSettings;
   readonly handler?: CopilotHonoApp;
@@ -66,6 +68,9 @@ export class Platform implements SlackPlatform {
           learningIntervalMinutes: settings.learningIntervalMinutes,
         };
       },
+    });
+    this.delegations = new DelegationService(this, workspace, {
+      timeoutMs: config.agentRunTimeoutMs ?? 90_000,
     });
     this.computers = new ComputerService(
       workspace,
@@ -95,7 +100,7 @@ export class Platform implements SlackPlatform {
   }
 
   /** Build a Dot agent bound to the current workspace configuration. */
-  agent(dotId: string) {
+  agent(dotId: string, options: { allowDelegation?: boolean } = {}) {
     return new DotAgent(
       this.store,
       this.workspace,
@@ -103,6 +108,8 @@ export class Platform implements SlackPlatform {
       dotId,
       this.learning,
       this.setupTelemetry,
+      this.delegations,
+      options.allowDelegation !== false,
     );
   }
 
@@ -217,11 +224,12 @@ export class Platform implements SlackPlatform {
     prompt: string,
     signal: AbortSignal,
     metadata?: Record<string, unknown>,
+    options: { allowDelegation?: boolean } = {},
   ): Promise<string> {
     this.requireReady();
     signal.throwIfAborted();
     const thread = this.workspace.requireThread(threadId);
-    const agent = this.agent(thread.dotId);
+    const agent = this.agent(thread.dotId, options);
     const history = this.runner.getThreadMessages(threadId);
     const prefix =
       metadata?.opendotsSource === 'voice_receipt'

@@ -5,6 +5,11 @@ import {
   connectionActionTool,
 } from '../shared/connection-types';
 import { ConnectionActionCard } from './ConnectionActionCard';
+import { DelegationCard } from './DelegationCard';
+import {
+  delegationActionSchema,
+  delegationActionTool,
+} from '../shared/delegation';
 import { contextualMessage, type PageContext } from './page-context';
 import { api } from './api';
 import type { Page } from '../server/pages';
@@ -211,6 +216,15 @@ export function Chat({
       ),
     },
     [thread.id],
+  );
+  useHumanInTheLoop(
+    {
+      name: delegationActionTool.name,
+      description: delegationActionTool.description,
+      parameters: delegationActionSchema,
+      render: (props) => <DelegationCard {...props} />,
+    },
+    [],
   );
   const computerCalls = agent.messages.flatMap((message) =>
     message.role === 'assistant' ? (message.toolCalls ?? []) : [],

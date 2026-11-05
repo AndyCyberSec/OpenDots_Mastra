@@ -61,6 +61,13 @@ export function App() {
   const [state, setState] = useState<State>();
   const [workspace, setWorkspace] = useState<WorkspaceState>();
   const [selectedDot, setSelectedDot] = useState('');
+  // Deleting a Dot (or a stale selection) must fall back to an existing one.
+  useEffect(() => {
+    if (!workspace) return;
+    if (workspace.dots.some((dot) => dot.id === selectedDot)) return;
+    setSelectedDot(workspace.dots[0]?.id ?? '');
+    setSelectedThread(undefined);
+  }, [workspace, selectedDot]);
   const [selectedThread, setSelectedThread] = useState<string>();
   const [view, rawSetView] = useState<'chat' | 'tasks' | 'memories' | 'space'>(
     'chat',

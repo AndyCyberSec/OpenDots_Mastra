@@ -79,6 +79,14 @@ export function WorkspaceDialog({
   const [model, setModel] = useState(
     dialog.type === 'dot' ? (dialog.dot?.model ?? '') : '',
   );
+  const [delegatesTo, setDelegatesTo] = useState<string[]>(
+    dialog.type === 'dot' ? (dialog.dot?.delegatesTo ?? []) : [],
+  );
+  const [delegationApproval, setDelegationApproval] = useState(
+    dialog.type === 'dot'
+      ? (dialog.dot?.delegationApprovalRequired ?? true)
+      : true,
+  );
   const [skillDelivery, setSkillDelivery] = useState(
     dialog.type === 'dot' ? (dialog.dot?.skillDeliveryEnabled ?? false) : false,
   );
@@ -183,6 +191,8 @@ export function WorkspaceDialog({
                   learningContainerId: learningContainer.trim() || null,
                   skillDeliveryEnabled: skillDelivery,
                   model,
+                  delegatesTo,
+                  delegationApprovalRequired: delegationApproval,
                 };
               }
               if (dialog.type === 'settings') {
@@ -451,6 +461,60 @@ export function WorkspaceDialog({
                 </p>
               </fieldset>
             )}
+            {dialog.type === 'dot' && (
+              <fieldset className="space-access-fields">
+                <legend>Delegation</legend>
+                {workspace.dots.filter(
+                  (candidate) => candidate.id !== dialog.dot?.id,
+                ).length ? (
+                  workspace.dots
+                    .filter((candidate) => candidate.id !== dialog.dot?.id)
+                    .map((candidate) => (
+                      <label className="permission-row" key={candidate.id}>
+                        <input
+                          type="checkbox"
+                          checked={delegatesTo.includes(candidate.id)}
+                          onChange={(event) =>
+                            setDelegatesTo((current) =>
+                              event.target.checked
+                                ? [...new Set([...current, candidate.id])]
+                                : current.filter((id) => id !== candidate.id),
+                            )
+                          }
+                        />
+                        <span>
+                          <strong>{candidate.name}</strong>
+                          <small>
+                            Allow this Dot to delegate work to {candidate.name}.
+                          </small>
+                        </span>
+                      </label>
+                    ))
+                ) : (
+                  <p className="muted">
+                    Create another specialist to enable delegation.
+                  </p>
+                )}
+                <label className="permission-row">
+                  <input
+                    type="checkbox"
+                    checked={delegationApproval}
+                    disabled={!delegatesTo.length}
+                    onChange={(event) =>
+                      setDelegationApproval(event.target.checked)
+                    }
+                  />
+                  <span>
+                    <strong>Ask me before delegating</strong>
+                    <small>
+                      A card shows the exact request and both specialists;
+                      nothing runs until you approve. Targets still apply their
+                      own permissions and approval gates.
+                    </small>
+                  </span>
+                </label>
+              </fieldset>
+            )}
             {dialog.type === 'dot' && dialog.dot && (
               <ConnectionsSection dotId={dialog.dot.id} />
             )}
@@ -591,6 +655,34 @@ export function WorkspaceDialog({
             <button className="primary full" disabled={busy}>
               {busy ? 'Saving…' : 'Save'}
             </button>
+            {dialog.type === 'dot' && dialog.dot && (
+              <button
+                type="button"
+                className="text-button danger delete-dot"
+                disabled={busy || workspace.dots.length <= 1}
+                onClick={async () => {
+                  const conversations = workspace.conversations.filter(
+                    (conversation) => conversation.dotId === dialog.dot?.id,
+                  ).length;
+                  if (
+                    !window.confirm(
+                      `Delete ${dialog.dot?.name} and ${conversations} conversation${conversations === 1 ? '' : 's'}? This cannot be undone. Pages it saved stay in their Spaces.`,
+                    )
+                  )
+                    return;
+                  setBusy(true);
+                  setError('');
+                  const ok = await mutate(
+                    `/dots/${dialog.dot?.id}`,
+                    'DELETE',
+                  ).catch(() => false);
+                  setBusy(false);
+                  if (ok) onClose();
+                }}
+              >
+                Delete specialist
+              </button>
+            )}
           </form>
         )}
       </section>

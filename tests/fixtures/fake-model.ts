@@ -19,6 +19,10 @@ export interface FakeModelOptions {
   status?: number;
   /** Delay the streaming response (ms). */
   delayMs?: number;
+  /** Choose a response per request; overrides text/tool for that request. */
+  respond?: (
+    body: Record<string, unknown>,
+  ) => { text?: string; tool?: FakeModelToolCall; status?: number } | undefined;
 }
 
 export interface FakeModel {
@@ -54,7 +58,9 @@ export async function startFakeModel(
         ? (parsed.messages as { role: string; content: unknown }[])
         : [];
       requests.push({ messages, body: parsed });
-      if (current.delayMs) {
+      const dynamic = current.respond?.(parsed);
+      const effective = dynamic ? { ...current, ...dynamic } : current;
+      if (effective.delayMs) {
         await new Promise((resolve) => setTimeout(resolve, current.delayMs));
       }
       if (current.status && current.status !== 200) {
@@ -90,7 +96,7 @@ export async function startFakeModel(
         ]),
       );
       const hasToolResult = messages.some((message) => message.role === 'tool');
-      if (current.tool && !hasToolResult) {
+      if (effective.tool && !hasToolResult) {
         response.write(
           chunk([
             {
@@ -102,8 +108,8 @@ export async function startFakeModel(
                     id: 'call_fixture',
                     type: 'function',
                     function: {
-                      name: current.tool.name,
-                      arguments: JSON.stringify(current.tool.args),
+                      name: effective.tool.name,
+                      arguments: JSON.stringify(effective.tool.args),
                     },
                   },
                 ],
@@ -116,7 +122,7 @@ export async function startFakeModel(
           chunk([{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage),
         );
       } else {
-        for (const part of (current.text ?? 'Done.').split(' '))
+        for (const part of (effective.text ?? 'Done.').split(' '))
           response.write(
             chunk([
               { index: 0, delta: { content: `${part} ` }, finish_reason: null },
