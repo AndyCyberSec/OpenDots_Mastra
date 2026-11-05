@@ -451,9 +451,7 @@ export function App() {
         </nav>
         {configured ? (
           <ThreadList
-            dotId={dot.id}
             dots={workspace.dots}
-            local={workspace.conversations}
             selected={view === 'chat' ? selectedThread : undefined}
             onSelect={(id) => {
               const conversation = workspace.conversations.find(
@@ -465,6 +463,11 @@ export function App() {
               setMobile(false);
             }}
             onNew={() => void newConversation()}
+            onChanged={() => void refresh()}
+            onConversationHidden={(id) => {
+              if (selectedThread === id) setSelectedThread(undefined);
+            }}
+            revision={workspace.conversations.length}
           />
         ) : (
           <div className="sidebar-empty">

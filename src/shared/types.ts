@@ -105,6 +105,15 @@ export interface Conversation {
   createdAt: number;
   /** Frozen at creation; null means this conversation does not participate. */
   learningContainerId?: string | null;
+  /** Archived conversations are hidden from the default list. */
+  archived?: boolean;
+  /** Number of stored messages, when the server includes it. */
+  messageCount?: number;
+}
+
+export interface ConversationPage {
+  conversations: Conversation[];
+  nextCursor: string | null;
 }
 export interface CallReceipt {
   anchorMessageId?: string | null;

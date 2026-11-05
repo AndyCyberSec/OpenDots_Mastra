@@ -82,6 +82,7 @@ interface ThreadRow {
   updatedAt: number;
   messages: string;
   nextSeq: number;
+  archived: number;
 }
 
 interface RunRow {
@@ -195,7 +196,10 @@ class RunPersistence {
     const pending = this.pending;
     this.pending = [];
     const messagesJson = JSON.stringify(messages ?? this.snapshot());
-    if (!pending.length && (!messagesJson || messagesJson === this.lastMessagesJson))
+    if (
+      !pending.length &&
+      (!messagesJson || messagesJson === this.lastMessagesJson)
+    )
       return true;
     try {
       this.db.exec('BEGIN IMMEDIATE');
@@ -297,7 +301,7 @@ class RunPersistence {
         }
         this.db
           .prepare(
-            "UPDATE agent_runs SET status=?, finishedAt=?, error=?, eventCount=? WHERE runId=?",
+            'UPDATE agent_runs SET status=?, finishedAt=?, error=?, eventCount=? WHERE runId=?',
           )
           .run(
             status,
@@ -444,7 +448,10 @@ export class SqliteAgentRunner
         request.agent.agentId ?? 'default',
         Number(thread.nextSeq ?? 0),
         thread.messages,
-        () => (Array.isArray(request.agent.messages) ? [...request.agent.messages] : []),
+        () =>
+          Array.isArray(request.agent.messages)
+            ? [...request.agent.messages]
+            : [],
         this.maxEventBytes,
         (error) => {
           active.runError = true;
@@ -663,7 +670,7 @@ export class SqliteAgentRunner
       agentId: row.agentId,
       organizationId: '',
       createdById: '',
-      archived: false,
+      archived: !!row.archived,
       createdAt: new Date(row.createdAt).toISOString(),
       updatedAt: new Date(row.updatedAt).toISOString(),
     }));
@@ -756,7 +763,9 @@ export class SqliteAgentRunner
   /** Number of durable journal rows for a thread. */
   durableEventCount(threadId: string): number {
     const row = this.db
-      .prepare('SELECT COUNT(*) AS count FROM agent_run_events WHERE threadId=?')
+      .prepare(
+        'SELECT COUNT(*) AS count FROM agent_run_events WHERE threadId=?',
+      )
       .get(threadId) as { count: number } | undefined;
     return Number(row?.count ?? 0);
   }
@@ -797,6 +806,13 @@ export class SqliteAgentRunner
       this.db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  /** Drop in-memory streaming state after the owner deletes the conversation. */
+  forgetThread(threadId: string) {
+    const active = this.active.get(threadId);
+    if (active?.isRunning) throw new Error('Conversation is still running.');
+    this.active.delete(threadId);
   }
 
   /** Last `limit` displayable messages, newest last. */
@@ -895,8 +911,7 @@ export class SqliteAgentRunner
         try {
           const parsed = JSON.parse(run.events) as unknown;
           if (Array.isArray(parsed))
-            for (const event of parsed as BaseEvent[])
-              yield { seq: 0, event };
+            for (const event of parsed as BaseEvent[]) yield { seq: 0, event };
         } catch {
           // Legacy row unreadable; ignore it.
         }

@@ -164,7 +164,12 @@ const migrations: Migration[] = [
       // Existing runs keep their compacted `events` JSON for replay; new runs
       // write rows to agent_run_events as they stream.
       addColumn(db, 'agent_threads', 'nextSeq', 'INTEGER NOT NULL DEFAULT 0');
-      addColumn(db, 'agent_runs', 'status', "TEXT NOT NULL DEFAULT 'completed'");
+      addColumn(
+        db,
+        'agent_runs',
+        'status',
+        "TEXT NOT NULL DEFAULT 'completed'",
+      );
       addColumn(db, 'agent_runs', 'startedAt', 'INTEGER NOT NULL DEFAULT 0');
       addColumn(db, 'agent_runs', 'finishedAt', 'INTEGER');
       addColumn(db, 'agent_runs', 'error', 'TEXT');
@@ -185,6 +190,20 @@ const migrations: Migration[] = [
           ON agent_runs(status, threadId);
         CREATE INDEX IF NOT EXISTS agent_threads_updated
           ON agent_threads(updatedAt);
+      `);
+    },
+  },
+  {
+    version: 5,
+    name: 'conversation-management',
+    up: (db) => {
+      // Archive state is mirrored on the agent thread so the owner API and the
+      // AG-UI thread endpoints agree. The workspace binding owns the column and
+      // adds it in WorkspaceStore, where that table is created.
+      addColumn(db, 'agent_threads', 'archived', 'INTEGER NOT NULL DEFAULT 0');
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS agent_threads_archive
+          ON agent_threads(archived, updatedAt);
       `);
     },
   },

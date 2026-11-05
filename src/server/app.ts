@@ -1,5 +1,6 @@
 import { computerRoutes } from './computer-routes.js';
 import { learningRoutes } from './learning-routes.js';
+import { conversationRoutes } from './conversation-routes.js';
 import { connectionRoutes } from './connection-routes.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -93,6 +94,7 @@ export function createApp({
   });
   if (platform) app.route('/api', computerRoutes(platform.computers));
   if (platform) app.route('/api', learningRoutes(platform));
+  if (platform) app.route('/api', conversationRoutes(platform, store, runner));
   if (platform)
     app.route(
       '/api',

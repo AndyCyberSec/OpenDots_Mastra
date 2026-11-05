@@ -113,6 +113,10 @@ export class DotAgent extends AbstractAgent {
           input.threadId,
           dot.id,
         );
+        if (conversation.archived)
+          throw new Error(
+            'This conversation is archived. Restore it before continuing.',
+          );
         if (!ai || !ai.model || !ai.apiKey) {
           configurationFailure = true;
           this.setupTelemetry?.capture({
@@ -546,7 +550,7 @@ export class DotAgent extends AbstractAgent {
  * provider errors can include request headers.
  */
 const SAFE_PREFIXES =
-  /^(Setup|Model configuration|Dot |Space |Specialist |Conversation |Call |This call|This turn|End the current|Voice provider|An audio|Browser |Research |Composio |Learning |The Learning|The selected|A turn|No assistant)/;
+  /^(Setup|Model configuration|Dot |Space |Specialist |Conversation |Call |This call|This turn|This conversation|End the current|Voice provider|An audio|Browser |Research |Composio |Learning |The Learning|The selected|A turn|No assistant)/;
 
 function turnFailureMessage(error: unknown): string {
   if (error instanceof Error) {

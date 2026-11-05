@@ -7,7 +7,13 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateLearningSettings } from '../shared/learning.js';
 import { migrate } from './db.js';
-import type { CallReceipt, Conversation, Dot, Space } from '../shared/types.js';
+import type {
+  CallReceipt,
+  Conversation,
+  ConversationPage,
+  Dot,
+  Space,
+} from '../shared/types.js';
 export class WorkspaceStore {
   private db: DatabaseSync;
   readonly pages: Pages;
@@ -36,6 +42,7 @@ export class WorkspaceStore {
       ['thread_bindings', 'learningContainerId', 'TEXT'],
       // Per-Dot model override. Null keeps the workspace default model.
       ['dots', 'model', 'TEXT'],
+      ['thread_bindings', 'archived', 'INTEGER NOT NULL DEFAULT 0'],
     ]) {
       if (
         !this.db
@@ -71,6 +78,12 @@ export class WorkspaceStore {
     )
       this.db.exec('ALTER TABLE calls ADD COLUMN anchorMessageId TEXT');
     migrate(this.db);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS thread_bindings_owner
+        ON thread_bindings(ownerId, createdAt);
+      CREATE INDEX IF NOT EXISTS thread_bindings_archive
+        ON thread_bindings(ownerId, archived, createdAt);
+    `);
     if (!this.spaces().length) {
       const space = this.createSpace(
         'Everyday',
@@ -270,11 +283,171 @@ export class WorkspaceStore {
       .run(sessionId, policyHash, id);
   }
   conversations(): Conversation[] {
-    return this.db
+    return (
+      this.db
+        .prepare(
+          'SELECT * FROM thread_bindings WHERE ownerId=? ORDER BY createdAt DESC',
+        )
+        .all(this.ownerId) as unknown as (Omit<Conversation, 'archived'> & {
+        archived: number;
+      })[]
+    ).map((row) => ({ ...row, archived: !!row.archived }));
+  }
+
+  conversation(id: string): Conversation | undefined {
+    return this.conversations().find((conversation) => conversation.id === id);
+  }
+
+  /**
+   * Owner-facing conversation listing. Keyset pagination keeps the query
+   * stable while new conversations are created; search matches the bound title
+   * and, where practical, stored message content.
+   */
+  conversationPage(options: {
+    limit: number;
+    cursor?: string;
+    query?: string;
+    archived?: boolean;
+  }): ConversationPage {
+    const limit = Math.min(Math.max(options.limit, 1), 100);
+    const query = (options.query ?? '').trim().slice(0, 200);
+    const archived = options.archived ? 1 : 0;
+    const cursor = parseConversationCursor(options.cursor);
+    const filters = ['b.ownerId=?', 'b.archived=?'];
+    const params: (string | number)[] = [this.ownerId, archived];
+    if (query) {
+      filters.push('(b.title LIKE ? OR t.messages LIKE ?)');
+      const like = `%${query}%`;
+      params.push(like, like);
+    }
+    if (cursor) {
+      filters.push('(b.createdAt < ? OR (b.createdAt = ? AND b.id < ?))');
+      params.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const rows = this.db
       .prepare(
-        'SELECT * FROM thread_bindings WHERE ownerId=? ORDER BY createdAt DESC',
+        `SELECT b.*, t.messages AS storedMessages
+         FROM thread_bindings b
+         LEFT JOIN agent_threads t ON t.threadId = b.id
+         WHERE ${filters.join(' AND ')}
+         ORDER BY b.createdAt DESC, b.id DESC
+         LIMIT ?`,
       )
-      .all(this.ownerId) as unknown as Conversation[];
+      .all(...params, limit + 1) as unknown as (Omit<
+      Conversation,
+      'archived'
+    > & {
+      archived: number;
+      storedMessages: string | null;
+    })[];
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return {
+      conversations: page.map((row) => ({
+        ...row,
+        archived: !!row.archived,
+        messageCount: countMessages(row.storedMessages),
+      })),
+      nextCursor:
+        rows.length > limit && last ? `${last.createdAt}:${last.id}` : null,
+    };
+  }
+
+  renameConversation(id: string, title: string): Conversation {
+    const conversation = this.requireThread(id);
+    const clean = title.trim().slice(0, 120);
+    if (!clean) throw new Error('Conversation title is required.');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare('UPDATE thread_bindings SET title=? WHERE id=? AND ownerId=?')
+        .run(clean, id, this.ownerId);
+      this.db
+        .prepare(
+          'UPDATE agent_threads SET name=?, updatedAt=? WHERE threadId=?',
+        )
+        .run(clean, Date.now(), conversation.id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.requireThread(id);
+  }
+
+  archiveConversation(id: string, archived: boolean): Conversation {
+    this.requireThread(id);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare(
+          'UPDATE thread_bindings SET archived=? WHERE id=? AND ownerId=?',
+        )
+        .run(+archived, id, this.ownerId);
+      this.db
+        .prepare(
+          'UPDATE agent_threads SET archived=?, updatedAt=? WHERE threadId=?',
+        )
+        .run(+archived, Date.now(), id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.requireThread(id);
+  }
+
+  taskIdsForThread(threadId: string): string[] {
+    return (
+      this.db
+        .prepare('SELECT taskId FROM task_threads WHERE threadId=?')
+        .all(threadId) as { taskId: string }[]
+    ).map((row) => row.taskId);
+  }
+
+  /**
+   * Delete a conversation and every local record that points at it. One
+   * transaction keeps workspace bindings, transcripts, approvals, captures,
+   * calls, scheduled-task links, Learning evidence, and Slack subscriptions
+   * consistent. Pages themselves are kept.
+   */
+  deleteConversation(id: string): boolean {
+    const conversation = this.db
+      .prepare('SELECT id FROM thread_bindings WHERE id=? AND ownerId=?')
+      .get(id, this.ownerId);
+    if (!conversation) return false;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const [table, column] of [
+        ['agent_run_events', 'threadId'],
+        ['agent_runs', 'threadId'],
+        ['agent_threads', 'threadId'],
+        ['page_reviews', 'threadId'],
+        ['page_threads', 'threadId'],
+        ['captures', 'threadId'],
+        ['calls', 'threadId'],
+        ['task_threads', 'threadId'],
+        ['learning_evidence', 'threadId'],
+        ['slack_subscriptions', 'threadId'],
+      ] as const) {
+        if (!this.tableExists(table)) continue;
+        this.db.prepare(`DELETE FROM ${table} WHERE ${column}=?`).run(id);
+      }
+      this.db
+        .prepare('DELETE FROM thread_bindings WHERE id=? AND ownerId=?')
+        .run(id, this.ownerId);
+      this.db.exec('COMMIT');
+      return true;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  private tableExists(table: string) {
+    return !!this.db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+      .get(table);
   }
   bindThread(id: string, dotId: string, title: string): Conversation {
     const dot = this.dot(dotId);
@@ -407,4 +580,26 @@ export class WorkspaceStore {
       .get(threadId);
     return typeof row?.value === 'string' ? JSON.parse(row.value) : null;
   }
+}
+
+function countMessages(value: string | null | undefined): number {
+  if (!value) return 0;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function parseConversationCursor(
+  value: string | undefined,
+): { createdAt: number; id: string } | undefined {
+  if (!value) return undefined;
+  const separator = value.indexOf(':');
+  if (separator < 1) return undefined;
+  const createdAt = Number(value.slice(0, separator));
+  const id = value.slice(separator + 1);
+  if (!Number.isFinite(createdAt) || !id) return undefined;
+  return { createdAt, id };
 }
