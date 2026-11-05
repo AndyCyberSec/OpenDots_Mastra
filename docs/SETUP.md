@@ -94,6 +94,20 @@ receipts, background tasks, Learning state, and Slack subscriptions. See
   single terminal write and status; late events are ignored.
 - Conversations have no framework retention limit and survive restarts.
 
+### Dot management and delegation
+
+A Dot can be edited or deleted from its dialog. Deletion is refused while one of
+its conversations is running and when it is the last Dot; it removes the Dot’s
+conversations, MCP connections, computer records, Learning evidence, and
+delegation edges, while pages it saved stay in their Spaces.
+
+Under **Delegation** in the Dot dialog, the owner can allow a Dot to delegate work
+to specific other Dots. Grants use stable Dot IDs, so renaming is safe; deleting a
+Dot removes its grants. **Ask me before delegating** (default on) shows an approval
+card with the exact request before the target runs. The target always applies its
+own permissions and approval gates, and delegated turns run in a dedicated inbox
+conversation with delegation disabled (depth one). See [DELEGATION.md](DELEGATION.md).
+
 ### Conversation management
 
 The sidebar supports search, archived view, pagination, and per-conversation

@@ -7,21 +7,21 @@ every connection.
 
 ## Workspace tables (preserved from upstream)
 
-| Table                                             | Purpose                                                                                                  |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `spaces`                                          | Spaces (name, description).                                                                              |
-| `dots`                                            | Specialist Dots: instructions, permissions, default Space, model override, legacy Learning container id. |
-| `dot_spaces`                                      | Many-to-many Space access grants per Dot.                                                                |
-| `thread_bindings`                                 | Owner-visible conversations: thread id, Dot, title, creation time, archive flag.                         |
-| `pages`                                           | Space pages with revision numbers and Markdown content.                                                  |
-| `page_threads` / `page_reviews`                   | Page ↔ conversation bindings and review receipts.                                                        |
-| `captures`                                        | Last research capture per conversation.                                                                  |
-| `calls`                                           | Voice call receipts.                                                                                     |
-| `mcp_connections`, `mcp_approvals`, `mcp_actions` | MCP connections, pending approvals, and action receipts.                                                 |
-| `computers` and related tables                    | Per-Dot computer identifiers, state, and action audit.                                                   |
-| `settings`, `tasks`, `runs`, `events`             | Workspace settings (including opt-in Learning automation) and durable background work.                   |
-| `memories`                                        | Owner-curated long-term preferences injected into the prompt.                                            |
-| `setup_telemetry`                                 | Legacy table; no longer written (no telemetry).                                                          |
+| Table                                             | Purpose                                                                                              |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `spaces`                                          | Spaces (name, description).                                                                          |
+| `dots`                                            | Specialist Dots: instructions, permissions, default Space, model override, delegation approval flag. |
+| `dot_spaces`                                      | Many-to-many Space access grants per Dot.                                                            |
+| `thread_bindings`                                 | Owner-visible conversations: thread id, Dot, title, creation time, archive flag.                     |
+| `pages`                                           | Space pages with revision numbers and Markdown content.                                              |
+| `page_threads` / `page_reviews`                   | Page ↔ conversation bindings and review receipts.                                                    |
+| `captures`                                        | Last research capture per conversation.                                                              |
+| `calls`                                           | Voice call receipts.                                                                                 |
+| `mcp_connections`, `mcp_approvals`, `mcp_actions` | MCP connections, pending approvals, and action receipts.                                             |
+| `computers` and related tables                    | Per-Dot computer identifiers, state, and action audit.                                               |
+| `settings`, `tasks`, `runs`, `events`             | Workspace settings (including opt-in Learning automation) and durable background work.               |
+| `memories`                                        | Owner-curated long-term preferences injected into the prompt.                                        |
+| `setup_telemetry`                                 | Legacy table; no longer written (no telemetry).                                                      |
 
 ## Conversation tables
 
@@ -118,6 +118,12 @@ kept (and can start a fresh page conversation). Scheduled tasks bound to the
 conversation are cancelled first and the request is refused while a run is
 active.
 
+Deleting a **Dot** removes its conversations with the same cascade, then its
+`dot_spaces`, MCP connections/approvals/actions, computer permissions/audit,
+delegation edges/approvals, and Learning evidence rows. Pages it saved stay in
+their Spaces. The request is refused while any of its conversations is running
+and when it is the last Dot.
+
 ## Learning tables (new)
 
 ```sql
@@ -181,6 +187,36 @@ and the interval since `lastAutoAttemptAt`/`lastAnalyzedAt` has elapsed.
 Analysis runs commit drafts only; publishing remains owner-only. A `running`
 analysis left by a crash is marked failed on upgrade and is not retried
 automatically. Manual analysis is unaffected by the interval.
+
+## Delegation tables (extension)
+
+```sql
+CREATE TABLE dot_delegations (
+  callerDotId TEXT NOT NULL,
+  targetDotId TEXT NOT NULL,
+  createdAt INTEGER NOT NULL,
+  PRIMARY KEY (callerDotId, targetDotId)
+);
+CREATE TABLE delegation_approvals (
+  id TEXT PRIMARY KEY,
+  callerDotId TEXT NOT NULL,
+  callerThreadId TEXT NOT NULL,
+  targetDotId TEXT NOT NULL,
+  request TEXT NOT NULL,
+  status TEXT NOT NULL,          -- pending|declined|approved|completed|failed
+  createdAt INTEGER NOT NULL,
+  decidedAt INTEGER,
+  expiresAt INTEGER NOT NULL,
+  result TEXT,
+  error TEXT
+);
+```
+
+`dots.delegationApprovalRequired` (default 1) controls whether the caller needs the
+owner’s approval card. Edges reference stable Dot IDs, so renaming is safe.
+Deleting a Dot removes both directions and its approvals. A delegated turn runs in
+the target’s inbox conversation `delegation:<callerId>:<targetId>` and is recorded
+in `agent_*` like any other turn.
 
 ## Slack tables (new)
 

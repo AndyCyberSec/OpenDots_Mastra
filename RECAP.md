@@ -159,6 +159,31 @@ Dopo la migrazione è stato fatto un passaggio di affidabilità e completezza:
   endpoint limitato con replay completo via `/connect`, snapshot di stato oltre il
   limite.
 
+**Dot dinamici e delega (estensione)**
+
+- I Dot ora si possono **eliminare** dal dialog: il server rifiuta se è l'ultimo
+  Dot o se una sua conversazione ha un run attivo; annulla i task pianificati
+  collegati e rimuove in una transazione conversazioni, trascrizioni, journal,
+  approvazioni, capture, calls, task link, evidence Learning, subscription Slack,
+  connessioni MCP, permessi/audit computer e deleghe. Le pagine salvate restano
+  nello Space.
+- **Delega tra Dot** opt-in: archi espliciti tra **ID stabili** (`dot_delegations`),
+  quindi rinominare non rompe nulla e i Dot nuovi partono senza permessi. Nel
+  dialog si scelgono i destinatari e se “Ask me before delegating” è attivo
+  (default).
+- La delega gira in una conversazione inbox dedicata per coppia caller→target
+  (`delegation:<caller>:<target>`), con i permessi e le approvazioni del target.
+  Profondità 1: il target non può ridelegare. Se il target è occupato la richiesta
+  torna `busy`; le approvazioni vengono “claimate” atomicamente (niente doppia
+  esecuzione), scadono dopo un'ora e vengono rifiutate se il permesso viene
+  revocato.
+- Con approvazione richiesta, la chat mostra una card con la richiesta esatta e i
+  nomi correnti dei due Dot; nulla parte prima di **Approve**. In voce/task/Slack
+  la delega che richiede approvazione risponde “continua nel web”.
+- Test: `delegation.test.ts`, `delegation-card.test.tsx`, `dot-delete.test.ts`
+  (permessi, depth, busy, approvazione/rifiuto, retry singolo, scadenza, revoca,
+  cancellazione con cascata e pulizia archi).
+
 **Migrazioni**
 
 - v4 journal durevole, v5 gestione conversazioni (archivio + indici),
@@ -251,7 +276,7 @@ Backup: copia `opendots.sqlite` + `-wal` + `-shm`. Dettagli: `docs/DATABASE.md`.
 - `npx tsc --noEmit`: pulito.
 - `npx eslint src tests`: pulito.
 - `prettier --check`: pulito.
-- `vitest run`: **63 file, 370 test passati**.
+- `vitest run`: **66 file, 382 test passati**.
 - `npm run build`: ok.
 - Smoke test sul build di produzione:
   - streaming SSE, tool call reale (`list_authorized_spaces`), trascrizione
@@ -333,3 +358,4 @@ git push -u origin feature/opendots-local-intelligence
   Learning automatico, migrazioni, backup e recovery.
 - `docs/LICENSE_AUDIT.md` — licenze e costi.
 - `docs/SETUP.md` — setup self-hosted completo.
+- `docs/DELEGATION.md` — regole e flusso della delega tra Dot.

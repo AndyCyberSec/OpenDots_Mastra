@@ -245,7 +245,7 @@ Local checks cover setup, SQLite migrations (including upgrades from the previou
 
 Automatic Learning analysis is manual by default and can be enabled in Settings with a minimum interval; the scheduler analyzes at most one ready container per tick, only when there is new evidence, and can only create drafts. Publishing always requires owner review. Existing conversations keep the container they were created with; changing the Dot's container affects only new conversations.
 
-This is a single-owner starting point. Shared editing, invitations, file uploads, and interactive page embeds are not included. Schedules are recurring instructions, not a complete goal or event-trigger system. Specialist Dots have separate roles and conversations; multi-Dot group conversations and automatic delegation are further work.
+This is a single-owner starting point. Shared editing, invitations, file uploads, and interactive page embeds are not included. Schedules are recurring instructions, not a complete goal or event-trigger system. Specialist Dots have separate conversations; owner-granted, depth-one delegation is available (see [Delegation](docs/DELEGATION.md)), while multi-Dot group conversations and automatic routing are not.
 
 ### Extending the template
 

@@ -170,3 +170,41 @@ a second scheduler and inherits shutdown behavior.
 (`lastAutoAttemptAt`, `lastAutoError`, `analyzedEvidenceAt`). Failed attempts wait
 for the interval instead of retrying every tick. Overlapping manual/automatic
 analyses are rejected. The review workflow is unchanged.
+
+## ADR-012: Owner-managed delegation by stable Dot ID
+
+**Decision.** Dot-to-Dot delegation is an opt-in graph of edges between stable Dot
+IDs (`dot_delegations`), never names or roles. Each caller can require an owner
+approval card (`dots.delegationApprovalRequired`, default on). Delegated work runs
+as a normal turn in a dedicated inbox conversation per caller→target pair, with
+the target's permissions/approvals and delegation tools disabled (depth one).
+
+**Why.** Dots are dynamic (created, renamed, deleted). Role-based hardcoding would
+break immediately. Explicit grants let the owner decide who may ask whom; an
+approval card keeps the owner in control of cross-specialist work; depth one and
+atomic approval claiming prevent loops and duplicate execution.
+
+**Alternatives.** Shared task-board pages (polling, no immediate delegation);
+capability tags (ambiguous routing, implicit behavior); direct use of
+`Platform.turn` without grants (unsafe).
+
+**Consequences.** Deleting a Dot must clean edges, approvals, and its inbox
+conversations in the same cascade as conversations (implemented). Grants are
+revalidated at execution and while a run streams; revoking them aborts the run.
+Delegation that needs approval is unavailable in voice/scheduled/Slack turns and
+asks the owner to continue in the web chat.
+
+## ADR-013: Dot deletion is a workspace operation with explicit cascade
+
+**Decision.** `DELETE /api/dots/:id` refuses while any of the Dot's conversations
+is running and when it is the last Dot. One transaction removes the Dot's
+conversations, transcripts, approvals, captures, calls, scheduled-task links,
+Learning evidence, Slack subscriptions, MCP connections/actions, computer
+records, and delegation edges/approvals. Pages remain.
+
+**Why.** Without deletion, dynamic Dots cannot be retired safely; without a
+defined cascade, grants and conversations would point at a missing Dot.
+
+**Consequences.** The UI asks for confirmation and states how many conversations
+will be deleted. Scheduled tasks bound to those conversations are cancelled first.
+OpenBot containers are external and are not destroyed by the database cascade.

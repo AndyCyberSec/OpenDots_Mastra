@@ -33,6 +33,13 @@ their live validation is deferred (see the last column).
 | 20  | Setup/usage telemetry             | CopilotKit ingest plus runtime telemetry                                                                                        | `SetupTelemetry` + SDK                                                   | Yes                            | Removed; runtime opted out before import                                                                                   | Removed               | `telemetry`, `setup-telemetry`                                         | —                                                                                                |
 | 21  | Managed channels runtime          | Channels SDK activation lifecycle                                                                                               | `@copilotkit/channels`                                                   | Yes                            | Not applicable; Slack is direct                                                                                            | Removed               | `slack` covers the replacement                                         | Only Slack existed upstream                                                                      |
 
+## Extensions beyond upstream
+
+Owner-managed Dot deletion and Dot-to-Dot delegation are deliberate additions,
+not upstream parity. Both are opt-in, scoped to the workspace owner, and documented
+in [DELEGATION.md](DELEGATION.md). Deleting a Dot cascades its conversations and
+local records; delegation never bypasses the target's permissions or approvals.
+
 ## Reliability notes
 
 - Incremental journaling is covered by tests that read durable events while a run
