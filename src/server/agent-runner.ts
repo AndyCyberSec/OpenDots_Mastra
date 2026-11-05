@@ -41,6 +41,12 @@ import { migrate } from './db.js';
  *     turns the terminal event into `RUN_ERROR` instead of claiming success.
  *   - On startup, runs still marked `running` are marked `interrupted` with
  *     their committed events intact. Nothing is retried automatically.
+ *   - Finalization is idempotent: the first finalize (normal completion,
+ *     error, or the forced stop fallback) wins. Late agent events and late
+ *     resolutions cannot append to or rewrite a finalized run.
+ *   - `/threads/:id/events` is a materialized inspector response, so it is
+ *     capped by `AGENT_THREAD_EVENTS_LIMIT` with an explicit truncation marker;
+ *     `/connect` still streams the complete journal in bounded chunks.
  *
  * Memory model: live subscribers use plain `Subject`s. `connect` replays the
  * persisted journal in bounded chunks and then joins the live stream, using a
@@ -53,6 +59,8 @@ const FLUSH_EVENT_THRESHOLD = 64;
 const FLUSH_INTERVAL_MS = 250;
 const REPLAY_CHUNK = 500;
 const DEFAULT_MAX_EVENT_BYTES = 512 * 1024;
+const DEFAULT_STOP_FINALIZE_MS = 2_500;
+const DEFAULT_MAX_THREAD_EVENTS = 10_000;
 
 interface SeqEvent {
   seq: number;
@@ -70,6 +78,8 @@ interface ActiveRun {
   runSubject: Subject<BaseEvent>;
   recent: SeqEvent[];
   runError: boolean;
+  /** Idempotency guard: set before the first finalize begins. */
+  finalized: boolean;
   stopTimer?: ReturnType<typeof setTimeout>;
   forceFinalize?: () => void;
 }
@@ -134,6 +144,7 @@ class RunPersistence {
   private pending: { seq: number; json: string }[] = [];
   private timer?: ReturnType<typeof setTimeout>;
   private failed = false;
+  private finalized = false;
   private persisted = 0;
   private lastMessagesJson: string;
 
@@ -162,7 +173,7 @@ class RunPersistence {
 
   /** Assign a sequence and queue the event. Returns undefined if storage is down. */
   append(event: BaseEvent): number | undefined {
-    if (this.failed) return undefined;
+    if (this.failed || this.finalized) return undefined;
     let json: string;
     try {
       json = JSON.stringify(event);
@@ -192,7 +203,7 @@ class RunPersistence {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
-    if (this.failed) return false;
+    if (this.failed || this.finalized) return false;
     const pending = this.pending;
     this.pending = [];
     const messagesJson = JSON.stringify(messages ?? this.snapshot());
@@ -250,6 +261,8 @@ class RunPersistence {
     finalizer: ReturnType<typeof createRunEventFinalizer>;
     messages: Message[];
   }): { events: BaseEvent[]; seqs: number[]; status: RunStatus } | undefined {
+    if (this.finalized) return undefined;
+    this.finalized = true;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
@@ -345,12 +358,18 @@ export class SqliteAgentRunner
   private readonly db: DatabaseSync;
   private readonly active = new Map<string, ActiveRun>();
   private readonly maxEventBytes: number;
+  private readonly stopFinalizeMs: number;
+  private readonly maxThreadEvents: number;
   private closed = false;
 
   constructor(
     path: string,
     readonly ownerId: string,
-    options: { maxEventBytes?: number } = {},
+    options: {
+      maxEventBytes?: number;
+      stopFinalizeMs?: number;
+      maxThreadEvents?: number;
+    } = {},
   ) {
     super();
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -364,12 +383,30 @@ export class SqliteAgentRunner
       Number.isInteger(configured) && configured >= 1024
         ? configured
         : DEFAULT_MAX_EVENT_BYTES;
+    const stopFinalize = Number(
+      options.stopFinalizeMs ?? DEFAULT_STOP_FINALIZE_MS,
+    );
+    this.stopFinalizeMs =
+      Number.isInteger(stopFinalize) && stopFinalize >= 1
+        ? stopFinalize
+        : DEFAULT_STOP_FINALIZE_MS;
+    const threadEventLimit = Number(
+      options.maxThreadEvents ??
+        process.env.AGENT_THREAD_EVENTS_LIMIT ??
+        DEFAULT_MAX_THREAD_EVENTS,
+    );
+    this.maxThreadEvents =
+      Number.isInteger(threadEventLimit) && threadEventLimit >= 2
+        ? threadEventLimit
+        : DEFAULT_MAX_THREAD_EVENTS;
     this.recoverInterruptedRuns();
   }
 
   close() {
     if (this.closed) return;
     for (const [threadId, active] of this.active) {
+      // Any late agent resolution must not finalize over the interrupted write.
+      active.finalized = true;
       try {
         active.agent.abortRun();
       } catch {
@@ -466,6 +503,7 @@ export class SqliteAgentRunner
       runSubject,
       recent: [],
       runError: false,
+      finalized: false,
     };
     this.active.set(request.threadId, active);
 
@@ -477,6 +515,11 @@ export class SqliteAgentRunner
     };
 
     const finalize = (options: { interruptionMessage?: string }) => {
+      // Forced finalization and a later agent resolution must converge on one
+      // terminal write. Without this guard a forced stop could be overwritten
+      // by `completed`, and late events could extend a finalized run.
+      if (active.finalized) return;
+      active.finalized = true;
       if (active.stopTimer) {
         clearTimeout(active.stopTimer);
         active.stopTimer = undefined;
@@ -549,6 +592,8 @@ export class SqliteAgentRunner
       try {
         await request.agent.runAgent(request.input, {
           onEvent: ({ event }) => {
+            // Late events after a forced finalization cannot modify the run.
+            if (active.finalized) return;
             let processed: BaseEvent = event;
             if (event.type === EventType.RUN_STARTED) {
               const started = event as BaseEvent & {
@@ -647,7 +692,7 @@ export class SqliteAgentRunner
       active.stopTimer ??= setTimeout(() => {
         if (this.active.get(request.threadId) === active)
           active.forceFinalize?.();
-      }, 2_500);
+      }, this.stopFinalizeMs);
       active.stopTimer.unref?.();
       return true;
     } catch {
@@ -680,30 +725,138 @@ export class SqliteAgentRunner
     return this.parseMessages(this.threadRow(threadId)?.messages);
   }
 
-  /** Full compacted event history. The runtime interface requires an array. */
+  /**
+   * Compacted event history for the runtime's `/threads/:id/events` endpoint.
+   *
+   * The interface requires a materialized array, so the response is bounded:
+   * when a thread exceeds `AGENT_THREAD_EVENTS_LIMIT` (default 10000, option
+   * `maxThreadEvents`), only the most recent events are returned, preceded by a
+   * `CUSTOM` truncation marker. Persistent history is never deleted — `/connect`
+   * and clients still replay the full journal in bounded chunks. Memory usage
+   * stays proportional to the retained window, not the conversation length.
+   */
   getThreadEvents(threadId: string): BaseEvent[] {
-    const all: BaseEvent[] = [];
-    for (const entry of this.persistedEventChunks(threadId))
-      all.push(entry.event);
-    return all.length ? compactEvents(all) : [];
+    const total = this.countPersistedEvents(threadId);
+    if (!total) return [];
+    const limit = this.maxThreadEvents;
+    if (total <= limit) {
+      const all: BaseEvent[] = [];
+      for (const entry of this.persistedEventChunks(threadId))
+        all.push(entry.event);
+      return all.length ? compactEvents(all) : [];
+    }
+    // Second pass skips the prefix so only the bounded tail is materialized.
+    const skip = total - limit;
+    let index = 0;
+    const tail: BaseEvent[] = [];
+    for (const entry of this.persistedEventChunks(threadId)) {
+      if (index++ < skip) continue;
+      tail.push(entry.event);
+    }
+    return [
+      {
+        type: EventType.CUSTOM,
+        name: 'opendots.history_truncated',
+        value: { totalEvents: total, retainedEvents: tail.length },
+      } as BaseEvent,
+      ...compactEvents(tail),
+    ];
   }
 
+  /**
+   * Latest state snapshot without materializing the thread history. Uses a
+   * bounded SQL lookup when JSON1 is available, then falls back to chunked
+   * descending scans (including legacy run rows).
+   */
   getThreadState(threadId: string): Record<string, unknown> | null {
-    const events = this.getThreadEvents(threadId);
-    for (let index = events.length - 1; index >= 0; index--) {
-      const event = events[index];
-      if (event.type === EventType.STATE_SNAPSHOT) {
-        const snapshot = (event as { snapshot?: unknown }).snapshot;
-        if (
-          snapshot &&
-          typeof snapshot === 'object' &&
-          !Array.isArray(snapshot)
+    try {
+      const row = this.db
+        .prepare(
+          "SELECT event FROM agent_run_events WHERE threadId=? AND json_extract(event, '$.type')=? ORDER BY seq DESC LIMIT 1",
         )
-          return { ...(snapshot as Record<string, unknown>) };
-        return null;
+        .get(threadId, EventType.STATE_SNAPSHOT) as
+        { event: string } | undefined;
+      if (row) {
+        try {
+          const snapshot = snapshotValue(JSON.parse(row.event) as BaseEvent);
+          if (snapshot !== undefined) return snapshot;
+        } catch {
+          // Corrupt row: fall through to the chunked scan.
+        }
+      }
+    } catch {
+      // JSON1 is unavailable: use the chunked scan below.
+    }
+
+    let cursor = Number.MAX_SAFE_INTEGER;
+    for (;;) {
+      const rows = this.db
+        .prepare(
+          'SELECT seq, event FROM agent_run_events WHERE threadId=? AND seq<? ORDER BY seq DESC LIMIT ?',
+        )
+        .all(threadId, cursor, REPLAY_CHUNK) as unknown as {
+        seq: number;
+        event: string;
+      }[];
+      if (!rows.length) break;
+      for (const row of rows) {
+        try {
+          const snapshot = snapshotValue(JSON.parse(row.event) as BaseEvent);
+          if (snapshot !== undefined) return snapshot;
+        } catch {
+          // Skip corrupt rows.
+        }
+      }
+      cursor = Number(rows[rows.length - 1].seq);
+    }
+
+    // Legacy runs keep compacted events in a JSON column; inspect newest first.
+    const runs = this.db
+      .prepare(
+        'SELECT events FROM agent_runs WHERE threadId=? ORDER BY createdAt DESC, rowid DESC',
+      )
+      .all(threadId) as { events: string }[];
+    for (const run of runs) {
+      if (!run.events) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(run.events);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(parsed)) continue;
+      for (let index = parsed.length - 1; index >= 0; index--) {
+        const snapshot = snapshotValue(parsed[index] as BaseEvent);
+        if (snapshot !== undefined) return snapshot;
       }
     }
     return null;
+  }
+
+  /** Count durable events without materializing them. */
+  private countPersistedEvents(threadId: string): number {
+    const runs = this.db
+      .prepare('SELECT runId, events FROM agent_runs WHERE threadId=?')
+      .all(threadId) as { runId: string; events: string }[];
+    let total = 0;
+    for (const run of runs) {
+      const row = this.db
+        .prepare('SELECT COUNT(*) AS count FROM agent_run_events WHERE runId=?')
+        .get(run.runId) as { count: number };
+      const journaled = Number(row.count);
+      if (journaled > 0) {
+        total += journaled;
+        continue;
+      }
+      if (!run.events) continue;
+      try {
+        const parsed = JSON.parse(run.events);
+        if (Array.isArray(parsed)) total += parsed.length;
+      } catch {
+        // Unreadable legacy row contributes no replayable events.
+      }
+    }
+    return total;
   }
 
   clearThreads(): void {
@@ -918,4 +1071,15 @@ export class SqliteAgentRunner
       }
     }
   }
+}
+
+/** `undefined` = not a state snapshot, `null` = unusable snapshot payload. */
+function snapshotValue(
+  event: BaseEvent,
+): Record<string, unknown> | null | undefined {
+  if (event.type !== EventType.STATE_SNAPSHOT) return undefined;
+  const snapshot = (event as { snapshot?: unknown }).snapshot;
+  if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot))
+    return { ...(snapshot as Record<string, unknown>) };
+  return null;
 }
