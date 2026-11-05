@@ -662,19 +662,14 @@ export function App() {
                       <div>
                         <strong>Connect your Dot</strong>
                         <p>
-                          Connect your model and conversation service in
-                          Settings to start chatting. Your Spaces and Dot
-                          preferences are ready to use.
+                          Connect a model provider (DeepSeek, Ollama, or any
+                          OpenAI-compatible endpoint) in the server environment
+                          to start chatting. Your Spaces and Dot preferences are
+                          ready to use, and conversations stay on this machine.
                         </p>
                         <p>
-                          Setup and usage metadata is collected by default.{' '}
-                          <a
-                            href="https://github.com/CopilotKit/OpenDots/blob/main/docs/SETUP-TELEMETRY.md"
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Tracking and opt-out details
-                          </a>
+                          OpenDots sends no setup or usage telemetry, and no
+                          CopilotKit Intelligence account is required.
                         </p>
                         <a
                           href="https://github.com/CopilotKit/OpenDots/blob/main/docs/SETUP.md"
@@ -951,6 +946,9 @@ export function App() {
           workspace={workspace}
           onClose={() => setDialog(undefined)}
           mutate={mutate}
+          onReviewLearning={(containerId) =>
+            setDialog({ type: 'learning', containerId })
+          }
         />
       )}
     </div>

@@ -20,3 +20,48 @@ export function validateLearningSettings(
   if (delivery && !containerId)
     throw new Error('Dot skill delivery requires a Learning container.');
 }
+
+/** Local Automatic Learning types shared by the server API and the React app. */
+export type LearningSkillStatus = 'draft' | 'published' | 'rejected';
+
+export interface LearningContainer {
+  id: string;
+  name: string;
+  paused: boolean;
+  threshold: number;
+  createdAt: number;
+  lastAnalyzedAt: number | null;
+}
+
+export interface LearningContainerSummary extends LearningContainer {
+  evidenceCount: number;
+  threadCount: number;
+  draftCount: number;
+  publishedCount: number;
+  ready: boolean;
+}
+
+export interface LearningSkill {
+  id: string;
+  containerId: string;
+  name: string;
+  description: string;
+  content: string;
+  status: LearningSkillStatus;
+  source: string;
+  evidenceCount: number;
+  createdAt: number;
+  reviewedAt: number | null;
+  publishedAt: number | null;
+}
+
+export interface LearningRun {
+  id: string;
+  containerId: string;
+  status: 'running' | 'completed' | 'failed';
+  error: string | null;
+  evidenceCount: number;
+  proposedCount: number;
+  createdAt: number;
+  finishedAt: number | null;
+}

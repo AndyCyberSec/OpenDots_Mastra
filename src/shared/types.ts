@@ -1,3 +1,5 @@
+import type { LearningContainerSummary } from './learning.js';
+
 export type Status =
   | 'queued'
   | 'running'
@@ -92,6 +94,8 @@ export interface Dot {
   createdAt: number;
   learningContainerId?: string | null;
   skillDeliveryEnabled?: boolean;
+  /** Optional per-Dot model override; defaults to the workspace model. */
+  model?: string | null;
 }
 export interface Conversation {
   id: string;
@@ -113,11 +117,14 @@ export interface CallReceipt {
   error: string | null;
 }
 export interface SetupStatus {
-  intelligence: boolean;
+  /** A provider-independent chat model is configured (AI_* or OPENAI_*). */
   model: boolean;
+  /** Conversation storage, replay, and agent execution are local. */
+  local: boolean;
   browser: boolean;
   voice: boolean;
   composio: boolean;
+  /** Local Slack adapter status: not_configured, setup_required, starting, online, activation_failed. */
   slack: string;
   missing: string[];
 }
@@ -127,4 +134,6 @@ export interface WorkspaceState {
   conversations: Conversation[];
   setup: SetupStatus;
   calls: CallReceipt[];
+  /** Local Automatic Learning containers (owner view). */
+  learning?: LearningContainerSummary[];
 }

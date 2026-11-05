@@ -4280,3 +4280,34 @@ h3 {
   overflow-wrap: anywhere;
   font-size: 11px;
 }
+
+/* Local Automatic Learning review */
+.learning-panel h3 {
+  margin: 1.1rem 0 0.4rem;
+  font-size: 0.95rem;
+}
+.learning-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.learning-skill {
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  border-radius: 10px;
+  padding: 0.7rem 0.85rem;
+  margin-bottom: 0.7rem;
+}
+.learning-skill pre,
+.learning-evidence {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 0.82rem;
+}
+.learning-evidence {
+  border-left: 2px solid var(--line, rgba(0, 0, 0, 0.12));
+  padding-left: 0.75rem;
+  margin: 0.5rem 0;
+}
