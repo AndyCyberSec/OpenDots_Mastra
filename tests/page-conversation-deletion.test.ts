@@ -1,36 +1,38 @@
 import { expect, it, vi } from 'vitest';
 import { WorkspaceStore } from '../src/server/workspace.js';
 import { PageService } from '../src/server/page-service.js';
+import type { SqliteAgentRunner } from '../src/server/agent-runner.js';
 
-it('does not bind a conversation when its page is deleted during thread creation', async () => {
+const fakeRunner = {
+  registerThread: vi.fn(),
+  getThreadMessages: vi.fn(() => []),
+} as unknown as SqliteAgentRunner;
+
+it('never reuses a deleted page conversation', async () => {
   const ws = new WorkspaceStore(':memory:', 'owner');
   try {
     const dot = ws.dots()[0];
     const page = ws.pages.create(dot.spaceId, { title: 'Temporary' });
-    let resolve!: () => void;
-    const remote = new Promise<void>((done) => {
-      resolve = done;
-    });
-    const getOrCreateThread = vi.fn(() => remote);
-    const service = new PageService(ws, () => ({
-      getOrCreateThread,
-      getThreadMessages: async () => ({ messages: [] }),
-    }));
-    const pending = service.conversation(dot.spaceId, page.id, dot.id);
-    const outcome = expect(pending).rejects.toThrow(/Page not found/);
-    expect(getOrCreateThread).toHaveBeenCalledTimes(1);
+    const service = new PageService(ws, () => fakeRunner);
+    const thread = await service.conversation(dot.spaceId, page.id, dot.id);
+    expect(ws.pages.forThread(thread.id)?.id).toBe(page.id);
+
     ws.pages.delete(dot.spaceId, page.id);
-    resolve();
-    await outcome;
-    expect(ws.conversations()).toHaveLength(0);
     expect(ws.pages.thread(page.id, dot.id)).toBeUndefined();
+    expect(ws.pages.forThread(thread.id)).toBeUndefined();
+
     const replacement = ws.pages.create(dot.spaceId, { title: 'Replacement' });
-    const thread = await service.conversation(
+    const next = await service.conversation(
       dot.spaceId,
       replacement.id,
       dot.id,
     );
-    expect(ws.pages.forThread(thread.id)?.id).toBe(replacement.id);
+    expect(next.id).not.toBe(thread.id);
+    expect(ws.pages.forThread(next.id)?.id).toBe(replacement.id);
+
+    await expect(
+      service.conversation(dot.spaceId, page.id, dot.id),
+    ).rejects.toThrow(/Page not found/);
   } finally {
     ws.close();
   }

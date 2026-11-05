@@ -13,9 +13,8 @@ function fixture() {
   stores.push(workspace);
   const id = workspace.dots()[0].id;
   const config = {
-    baseUrl: 'https://example.com',
+    databasePath: ':memory:',
     voiceName: 'voice',
-    slackUsers: [],
     runtimeUrl: 'http://localhost',
   };
   // No computer supervisor configured: `configured` is false, so any
@@ -34,9 +33,8 @@ function configuredFixture() {
   stores.push(workspace);
   const id = workspace.dots()[0].id;
   const config = {
-    baseUrl: 'https://example.com',
+    databasePath: ':memory:',
     voiceName: 'voice',
-    slackUsers: [],
     runtimeUrl: 'http://localhost',
     computerSupervisorUrl: 'https://supervisor.example.com',
     computerSupervisorToken: 'supervisor-token',
@@ -129,9 +127,8 @@ function upstreamFixture(responses: Record<string, unknown>) {
   const id = workspace.dots()[0].id;
   workspace.computers.patch(id, { enabled: true, browser: true });
   const config = {
-    baseUrl: 'https://example.com',
+    databasePath: ':memory:',
     voiceName: 'voice',
-    slackUsers: [],
     runtimeUrl: 'http://localhost',
     computerSupervisorUrl: 'https://supervisor.example.com',
     computerSupervisorToken: 'supervisor-token',

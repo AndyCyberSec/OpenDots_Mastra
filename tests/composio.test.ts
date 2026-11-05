@@ -18,10 +18,9 @@ vi.mock('@composio/core', () => ({
 
 const config: PlatformConfig = {
   composioApiKey: 'composio-fixture',
-  baseUrl: 'https://example.com',
+  databasePath: ':memory:',
   runtimeUrl: '',
   voiceName: 'marin',
-  slackUsers: [],
 };
 const stores: WorkspaceStore[] = [];
 afterEach(() => {

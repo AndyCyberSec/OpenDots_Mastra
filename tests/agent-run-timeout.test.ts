@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventType, type RunAgentInput } from '@ag-ui/core';
 import { lastValueFrom, toArray } from 'rxjs';
-import { DotAgent } from '../src/server/dot-agent.js';
+import { DotAgent, type DotAgentDeps } from '../src/server/dot-agent.js';
+import { SetupTelemetry } from '../src/server/setup-telemetry.js';
+import { SkillLibrary } from '../src/server/skills.js';
 import {
   DEFAULT_AGENT_RUN_TIMEOUT_MS,
   agentRunTimeoutMsFromEnv,
@@ -19,6 +21,39 @@ vi.mock('../src/server/composio.js', () => ({
 }));
 
 const resources: Array<{ close(): void }> = [];
+function dotAgent(
+  store: Store,
+  workspace: WorkspaceStore,
+  options: { composioApiKey?: string; agentRunTimeoutMs?: number } = {},
+) {
+  const ai = {
+    provider: 'openai-compatible' as const,
+    baseUrl: 'https://unused.invalid/v1',
+    apiKey: 'fixture',
+    model: 'custom-model',
+    maxOutputTokens: 100,
+  };
+  const deps: DotAgentDeps = {
+    store,
+    workspace,
+    config: {
+      ai,
+      databasePath: ':memory:',
+      composioApiKey: options.composioApiKey,
+      webSearchProvider: 'disabled',
+      runtimeUrl: '',
+      voiceName: 'marin',
+      ...(options.agentRunTimeoutMs
+        ? { agentRunTimeoutMs: options.agentRunTimeoutMs }
+        : {}),
+    },
+    ai,
+    skills: new SkillLibrary(join(tmpdir(), 'opendots-no-skills')),
+    setupTelemetry: new SetupTelemetry(),
+  };
+  return new DotAgent(deps, workspace.dots()[0].id);
+}
+
 function sharedStores() {
   const dir = mkdtempSync(join(tmpdir(), 'opendots-timeout-'));
   const path = join(dir, 'test.sqlite');
@@ -59,22 +94,10 @@ it('finishes an interactive turn when Composio startup stalls', async () => {
   store.updateSettings({ appsAllowed: true });
   workspace.updateDot(dot.id, { ...dot, appsAllowed: true });
   workspace.bindThread('thread', dot.id, 'Timeout test');
-  const agent = new DotAgent(
-    store,
-    workspace,
-    {
-      intelligenceKey: 'fixture',
-      apiKey: 'fixture',
-      model: 'custom-model',
-      composioApiKey: 'fixture',
-      baseUrl: 'https://unused.invalid/v1',
-      runtimeUrl: '',
-      voiceName: 'marin',
-      slackUsers: [],
-      agentRunTimeoutMs: 1_250,
-    },
-    dot.id,
-  );
+  const agent = dotAgent(store, workspace, {
+    composioApiKey: 'fixture',
+    agentRunTimeoutMs: 1_250,
+  });
   const input: RunAgentInput = {
     threadId: 'thread',
     runId: 'run',
@@ -108,21 +131,9 @@ it('does not start the inner agent after Composio startup is cancelled', async (
   store.updateSettings({ appsAllowed: true });
   workspace.updateDot(dot.id, { ...dot, appsAllowed: true });
   workspace.bindThread('thread', dot.id, 'Cancellation test');
-  const agent = new DotAgent(
-    store,
-    workspace,
-    {
-      intelligenceKey: 'fixture',
-      apiKey: 'fixture',
-      model: 'custom-model',
-      composioApiKey: 'fixture',
-      baseUrl: 'https://unused.invalid/v1',
-      runtimeUrl: '',
-      voiceName: 'marin',
-      slackUsers: [],
-    },
-    dot.id,
-  );
+  const agent = dotAgent(store, workspace, {
+    composioApiKey: 'fixture',
+  });
   let resolveSession!: (session: unknown) => void;
   composio.session.mockReturnValue(
     new Promise((resolve) => {

@@ -15,9 +15,16 @@ function fixture(ownerToken?: string) {
   });
   const config = { mode: 'live' as const, baseUrl: 'https://example.com' };
   const platform = new Platform(store, ws, {
-    baseUrl: config.baseUrl,
+    ai: {
+      provider: 'openai-compatible',
+      baseUrl: 'https://example.com/v1',
+      apiKey: 'fixture',
+      model: 'fixture',
+      maxOutputTokens: 100,
+    },
+    databasePath: ':memory:',
+    webSearchProvider: 'disabled',
     voiceName: 'marin',
-    slackUsers: [],
     runtimeUrl: '',
   });
   return {
@@ -116,14 +123,12 @@ it('supports manual pages without credentials and returns validation, scope and 
       )
     ).status,
   ).toBe(409);
-  expect(
-    (
-      await app.request(
-        `${path}/${page.id}/conversation`,
-        request({ dotId: ws.dots()[0].id }),
-      )
-    ).status,
-  ).toBe(503);
+  const conversation = await app.request(
+    `${path}/${page.id}/conversation`,
+    request({ dotId: ws.dots()[0].id }),
+  );
+  expect(conversation.status).toBe(200);
+  expect((await conversation.json()).id).toEqual(expect.any(String));
   expect(ws.pages.get(space, page.id).content).toBe('First');
   expect(
     (
@@ -413,7 +418,7 @@ it.each([
   new Error('Provider secret'),
   new SyntaxError('Unexpected token in provider secret'),
 ])(
-  'keeps real Intelligence failures as 503 without exposing details: %s',
+  'keeps unexpected page service failures as 503 without exposing details: %s',
   async (error) => {
     const { ws, app, platform } = fixture();
     ws.bindThread('valid-thread', ws.dots()[0].id, 'Conversation');
@@ -425,7 +430,7 @@ it.each([
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({
       error:
-        'Page operation could not complete. Check Intelligence setup or retry; your draft has not been discarded.',
+        'Page operation could not complete. Check the server configuration and retry; your draft has not been discarded.',
     });
   },
 );
@@ -444,7 +449,7 @@ it('keeps page conversation response parsing failures as 503', async () => {
   expect(response.status).toBe(503);
   expect(await response.json()).toEqual({
     error:
-      'Page operation could not complete. Check Intelligence setup or retry; your draft has not been discarded.',
+      'Page operation could not complete. Check the server configuration and retry; your draft has not been discarded.',
   });
 });
 
