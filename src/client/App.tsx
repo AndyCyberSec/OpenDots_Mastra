@@ -662,19 +662,14 @@ export function App() {
                       <div>
                         <strong>Connect your Dot</strong>
                         <p>
-                          Connect your model and conversation service in
-                          Settings to start chatting. Your Spaces and Dot
-                          preferences are ready to use.
+                          Connect a model provider (DeepSeek, Ollama, or any
+                          OpenAI-compatible endpoint) in the server environment
+                          to start chatting. Your Spaces and Dot preferences are
+                          ready to use, and conversations stay on this machine.
                         </p>
                         <p>
-                          Setup and usage metadata is collected by default.{' '}
-                          <a
-                            href="https://github.com/CopilotKit/OpenDots/blob/main/docs/SETUP-TELEMETRY.md"
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Tracking and opt-out details
-                          </a>
+                          OpenDots sends no setup or usage telemetry. Review the
+                          architecture and security notes in the project docs.
                         </p>
                         <a
                           href="https://github.com/CopilotKit/OpenDots/blob/main/docs/SETUP.md"
@@ -743,9 +738,10 @@ export function App() {
                   </div>
                   <div className="connection-note">
                     <span
-                      className={`online-dot ${workspace.setup.slack === 'online' ? '' : 'off'}`}
+                      className={`online-dot ${workspace.setup.model ? '' : 'off'}`}
                     />
-                    Slack · {workspace.setup.slack.replaceAll('_', ' ')}
+                    Local agents ·{' '}
+                    {workspace.setup.model ? 'ready' : 'model needed'}
                     <button
                       className="text-button"
                       onClick={() => setDialog({ type: 'settings' })}

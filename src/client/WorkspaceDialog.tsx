@@ -63,8 +63,8 @@ export function WorkspaceDialog({
     dialog.type === 'dot' ? (dialog.dot?.spaceId ?? dialog.spaceId) : '',
   );
   const [interval, setInterval] = useState('86400');
-  const [learningContainer, setLearningContainer] = useState(
-    dialog.type === 'dot' ? (dialog.dot?.learningContainerId ?? '') : '',
+  const [model, setModel] = useState(
+    dialog.type === 'dot' ? (dialog.dot?.model ?? '') : '',
   );
   const [skillDelivery, setSkillDelivery] = useState(
     dialog.type === 'dot' ? (dialog.dot?.skillDeliveryEnabled ?? false) : false,
@@ -162,8 +162,11 @@ export function WorkspaceDialog({
                   .split(',')
                   .map((slug) => slug.trim())
                   .filter(Boolean),
-                learningContainerId: learningContainer.trim() || null,
+                // Legacy Intelligence container ids are preserved for existing
+                // Dots but no longer used: skill delivery is local.
+                learningContainerId: dialog.dot?.learningContainerId ?? null,
                 skillDeliveryEnabled: skillDelivery,
+                model,
               };
             }
             if (dialog.type === 'settings') {
@@ -351,52 +354,48 @@ export function WorkspaceDialog({
           )}
           {dialog.type === 'dot' && (
             <fieldset className="space-access-fields">
-              <legend>Automatic Learning</legend>
-              <label className="field-label" htmlFor="learning-container">
-                Learning container ID
-              </label>
-              <input
-                id="learning-container"
-                value={learningContainer}
-                maxLength={64}
-                pattern="[a-z0-9]+(-[a-z0-9]+)*"
-                placeholder="research-workflow"
-                aria-describedby="learning-help"
-                onChange={(event) => {
-                  setLearningContainer(event.target.value);
-                  if (!event.target.value.trim()) setSkillDelivery(false);
-                }}
-              />
-              <p className="muted" id="learning-help">
-                Create this container in your Intelligence project first. New
-                conversations will contribute evidence to it. Leave blank to
-                keep new conversations out of Learning. Existing conversations
-                retain their original assignment.
-              </p>
+              <legend>Local skills</legend>
               <label className="permission-row">
                 <input
                   type="checkbox"
                   checked={skillDelivery}
-                  disabled={!learningContainer.trim()}
                   onChange={(event) => setSkillDelivery(event.target.checked)}
                 />
                 <span>
-                  <strong>Use published skills</strong>
+                  <strong>Use local skills</strong>
                   <small>
-                    Load reviewed skills from each conversation’s assigned
-                    container. Enable delivery in Intelligence too. Turning this
-                    off stops skill loading; it does not stop evidence
-                    collection.
+                    Offer this Dot the skills found in the server&apos;s
+                    SKILLS_DIR (default ./skills). Each skill is a folder with a
+                    SKILL.md and optional reference files. Nothing is sent to a
+                    hosted learning service.
                   </small>
                 </span>
               </label>
-              <a
-                href="https://docs.copilotkit.ai/learning"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Set up Learning and review skills ↗
-              </a>
+              <p className="muted">
+                Skills are read from disk on each turn. Add or edit them with
+                your normal file tools; no restart is required.
+              </p>
+            </fieldset>
+          )}
+          {dialog.type === 'dot' && (
+            <fieldset className="space-access-fields">
+              <legend>Model</legend>
+              <label className="field-label" htmlFor="dot-model">
+                Model override
+              </label>
+              <input
+                id="dot-model"
+                value={model}
+                maxLength={200}
+                placeholder="Workspace default"
+                aria-describedby="dot-model-help"
+                onChange={(event) => setModel(event.target.value)}
+              />
+              <p className="muted" id="dot-model-help">
+                Leave blank to use AI_MODEL. Enter the provider&apos;s exact
+                model id, for example deepseek-chat or llama3.1. OpenDots never
+                switches provider or model on its own.
+              </p>
             </fieldset>
           )}
           {dialog.type === 'dot' && dialog.dot && (
@@ -471,28 +470,19 @@ export function WorkspaceDialog({
                 )}
               </p>
               <p>
-                Slack: {workspace.setup.slack.replaceAll('_', ' ')}. Voice:{' '}
+                Voice:{' '}
                 {workspace.setup.voice
                   ? 'configuration present'
                   : 'needs VOICE_API_KEY and VOICE_MODEL'}
-                .
+                . Conversations, tool calls, and approvals are stored in the
+                local SQLite database.
               </p>
               <p>
-                Setup and usage metadata is collected by default.{' '}
-                <a
-                  href="https://github.com/CopilotKit/OpenDots/blob/main/docs/SETUP-TELEMETRY.md"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Tracking and opt-out details
-                </a>
+                OpenDots sends no setup or usage telemetry, and no CopilotKit
+                Intelligence credentials are required.
               </p>
-              <a
-                href="https://github.com/CopilotKit/OpenDots/blob/main/docs/SETUP.md"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Template setup guide ↗
+              <a href="/docs/SETUP.md" target="_blank" rel="noreferrer">
+                Setup guide ↗
               </a>
             </div>
           )}
